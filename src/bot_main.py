@@ -85,10 +85,11 @@ def main():
     
     print("=" * 60)
     print("📋 Available Features:")
-    print("  ✅ Declaration-based Registration")
-    print("  ✅ Sentence/Target System")
-    print("  ✅ Category-based Organization")
-    print("  ✅ Like System for Sentences")
+    print("  ✅ Inline Button Declaration Registration")
+    print("  ✅ Automatic Mute/Unmute System")
+    print("  ✅ Sentence/Target System with Categories")
+    print("  ✅ Like System for Engagement")
+    print("  ✅ Group Rules Acceptance")
     print("=" * 60)
     print("📋 Group Commands:")
     print("  /start - Initialize bot in group")
@@ -98,7 +99,11 @@ def main():
     print("  /mysentences - View your sentences")
     print("  /reset - Reset all data (admin)")
     print("=" * 60)
-    print("🔐 New members must accept declaration in DM")
+    print("🔐 Registration Flow:")
+    print("  1. New member joins → Gets muted")
+    print("  2. Clicks registration button → Opens DM")
+    print("  3. Reads declaration → Clicks 'I ACCEPT'")
+    print("  4. Auto-unmuted in group → Can participate")
     print("=" * 60)
     
     # Run the bot
