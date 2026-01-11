@@ -2,7 +2,7 @@
 Registration module for new members with inline button declaration acceptance
 """
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, CommandHandler
 from datetime import datetime
 import logging
 
@@ -517,9 +517,10 @@ def setup_registration_handlers(application):
     """Setup all registration handlers"""
     
     # Handle private start command for registration
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.Regex(r'^/start'),
-        handle_private_start
+    application.add_handler(CommandHandler(
+        "start", 
+        handle_private_start,
+        filters=filters.ChatType.PRIVATE
     ))
     
     # Handle new members joining
