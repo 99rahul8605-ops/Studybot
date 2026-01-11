@@ -28,6 +28,7 @@ By joining this group, you agree to:
 *Violation of these rules may result in removal from the group.*
 """
 
+
 async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle new member joining - Mute them and ask for registration"""
     if not update.message or not update.message.new_chat_members:
@@ -105,10 +106,27 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             continue
         
-        # Create registration button
-        bot_username = context.bot.username
-        registration_link = f"https://t.me/{bot_username}?start=register_{group_id}"
+        # Get bot username safely
+        try:
+            bot_info = await context.bot.get_me()
+            bot_username = bot_info.username
+            registration_link = f"https://t.me/{bot_username}?start=register_{group_id}"
+            print(f"🔗 Registration link: {registration_link}")
+        except Exception as e:
+            print(f"❌ Could not get bot username: {e}")
+            # Fallback: user will need to start the bot manually
+            registration_link = f"https://t.me/{context.bot.username}?start=register_{group_id}" if context.bot.username else None
         
+        if not registration_link:
+            await update.message.reply_text(
+                f"👋 Welcome @{username}!\n\n"
+                "⚠️ Please start a chat with me (DM) and send:\n"
+                f"/start register_{group_id}\n\n"
+                "To complete registration."
+            )
+            return
+        
+        # Create registration button
         keyboard = [
             [
                 InlineKeyboardButton(
@@ -138,7 +156,7 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Send welcome message
         try:
-            sent_message = await update.message.reply_text(
+            await update.message.reply_text(
                 welcome_message,
                 parse_mode="Markdown",
                 reply_markup=reply_markup
