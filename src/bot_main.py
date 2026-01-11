@@ -1,4 +1,4 @@
-    """
+"""
 Main bot file - Entry point for the bot
 """
 import os
@@ -78,7 +78,7 @@ def main():
     # Setup job queue for checking muted users
     job_queue = application.job_queue
     if job_queue:
-        job_queue.run_repeating(check_muted_users, interval=1800, first=10)  # Every 30 minutes
+        job_queue.run_repeating(check_muted_users, interval=1800, first=10)
         print("✅ Scheduled job for muted users check")
     
     # Get allowed group info
