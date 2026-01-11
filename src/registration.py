@@ -2,7 +2,7 @@
 Registration module for new members with declaration acceptance
 """
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
+from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, CommandHandler
 from datetime import datetime
 import re
 import json
@@ -151,7 +151,7 @@ async def view_rules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command in private chat for registration"""
     if not update.message or update.message.chat.type != "private":
-        return
+        return ConversationHandler.END
     
     user_id = update.message.from_user.id
     username = update.message.from_user.username or update.message.from_user.first_name
@@ -173,13 +173,13 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                             "❌ You must be a member of the group to register.\n"
                             "Please join the group first and try again."
                         )
-                        return
+                        return ConversationHandler.END
                 except:
                     await update.message.reply_text(
                         "❌ You must be a member of the group to register.\n"
                         "Please join the group first and try again."
                     )
-                    return
+                    return ConversationHandler.END
                 
                 # Check if user is already verified
                 if db.is_user_verified(user_id, group_id):
@@ -187,7 +187,7 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                         "✅ You are already verified in this group!\n"
                         "You can now participate in discussions."
                     )
-                    return
+                    return ConversationHandler.END
                 
                 # Check if user has pending registration
                 registration = db.get_registration(user_id, group_id)
@@ -195,7 +195,7 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                     await update.message.reply_text(
                         "❌ No registration found. Please use the registration button in the group."
                     )
-                    return
+                    return ConversationHandler.END
                 
                 # Store registration info in context
                 context.user_data['registration'] = {
