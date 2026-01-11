@@ -1,6 +1,6 @@
 import os
-from typing import Dict, List, Optional
-from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from dotenv import load_dotenv
@@ -37,10 +37,21 @@ class MongoDB:
         if "targets" not in collections:
             self.db.create_collection("targets")
             self.db.targets.create_index([("user_id", 1), ("date", 1)], unique=True)
+            self.db.targets.create_index([("group_id", 1), ("date", 1)])
         
         if "group_settings" not in collections:
             self.db.create_collection("group_settings")
             self.db.group_settings.create_index("group_id", unique=True)
+        
+        if "registrations" not in collections:
+            self.db.create_collection("registrations")
+            self.db.registrations.create_index([("user_id", 1), ("group_id", 1)], unique=True)
+            self.db.registrations.create_index("verification_code")
+        
+        if "muted_users" not in collections:
+            self.db.create_collection("muted_users")
+            self.db.muted_users.create_index([("user_id", 1), ("group_id", 1)], unique=True)
+            self.db.muted_users.create_index("muted_until", expireAfterSeconds=0)
     
     def add_target(self, group_id: int, user_id: int, username: str, target: str, date: datetime = None):
         """Add a target for a user on a specific date"""
@@ -58,7 +69,7 @@ class MongoDB:
         }
         
         try:
-            result = self.db.targets.update_one(
+            self.db.targets.update_one(
                 {"user_id": user_id, "date": date},
                 {"$set": target_data},
                 upsert=True
@@ -105,9 +116,13 @@ class MongoDB:
             if group_id:
                 self.db.targets.delete_many({"group_id": group_id})
                 self.db.group_settings.delete_one({"group_id": group_id})
+                self.db.registrations.delete_many({"group_id": group_id})
+                self.db.muted_users.delete_many({"group_id": group_id})
             else:
                 self.db.targets.delete_many({})
                 self.db.group_settings.delete_many({})
+                self.db.registrations.delete_many({})
+                self.db.muted_users.delete_many({})
             return True
         except Exception as e:
             print(f"Error resetting data: {e}")
@@ -137,6 +152,118 @@ class MongoDB:
     def get_allowed_group(self):
         """Get the allowed group info"""
         return self.db.group_settings.find_one()
+    
+    # New Registration Functions
+    
+    def create_registration(self, user_id: int, group_id: int, username: str = None):
+        """Create a new registration record for user"""
+        import secrets
+        verification_code = secrets.token_hex(3).upper()  # 6-character code
+        
+        registration_data = {
+            "user_id": user_id,
+            "group_id": group_id,
+            "username": username,
+            "verification_code": verification_code,
+            "status": "pending",
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
+        }
+        
+        try:
+            self.db.registrations.update_one(
+                {"user_id": user_id, "group_id": group_id},
+                {"$set": registration_data},
+                upsert=True
+            )
+            return verification_code
+        except Exception as e:
+            print(f"Error creating registration: {e}")
+            return None
+    
+    def get_registration(self, user_id: int, group_id: int):
+        """Get registration data for user"""
+        return self.db.registrations.find_one({"user_id": user_id, "group_id": group_id})
+    
+    def verify_registration(self, user_id: int, group_id: int, code: str) -> bool:
+        """Verify registration code"""
+        registration = self.db.registrations.find_one({
+            "user_id": user_id,
+            "group_id": group_id,
+            "verification_code": code,
+            "status": "pending"
+        })
+        
+        if registration:
+            self.db.registrations.update_one(
+                {"user_id": user_id, "group_id": group_id},
+                {"$set": {
+                    "status": "verified",
+                    "verified_at": datetime.now(),
+                    "updated_at": datetime.now()
+                }}
+            )
+            
+            # Remove from muted users
+            self.db.muted_users.delete_one({"user_id": user_id, "group_id": group_id})
+            
+            return True
+        return False
+    
+    def is_user_verified(self, user_id: int, group_id: int) -> bool:
+        """Check if user is verified in group"""
+        registration = self.db.registrations.find_one({
+            "user_id": user_id,
+            "group_id": group_id,
+            "status": "verified"
+        })
+        return registration is not None
+    
+    # Mute Functions
+    
+    def mute_user(self, user_id: int, group_id: int, hours: int = 24):
+        """Mute user for specified hours"""
+        muted_until = datetime.now() + timedelta(hours=hours)
+        
+        mute_data = {
+            "user_id": user_id,
+            "group_id": group_id,
+            "muted_at": datetime.now(),
+            "muted_until": muted_until,
+            "reason": "pending_registration"
+        }
+        
+        try:
+            self.db.muted_users.update_one(
+                {"user_id": user_id, "group_id": group_id},
+                {"$set": mute_data},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            print(f"Error muting user: {e}")
+            return False
+    
+    def is_user_muted(self, user_id: int, group_id: int) -> bool:
+        """Check if user is currently muted"""
+        mute_record = self.db.muted_users.find_one({
+            "user_id": user_id,
+            "group_id": group_id,
+            "muted_until": {"$gt": datetime.now()}
+        })
+        return mute_record is not None
+    
+    def unmute_user(self, user_id: int, group_id: int):
+        """Unmute user"""
+        result = self.db.muted_users.delete_one({"user_id": user_id, "group_id": group_id})
+        return result.deleted_count > 0
+    
+    def get_muted_users(self, group_id: int):
+        """Get all muted users in group"""
+        return list(self.db.muted_users.find({
+            "group_id": group_id,
+            "muted_until": {"$gt": datetime.now()}
+        }))
     
     def close(self):
         """Close MongoDB connection"""
