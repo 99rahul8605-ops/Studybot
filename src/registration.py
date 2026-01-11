@@ -28,7 +28,6 @@ By joining this group, you agree to:
 *Violation of these rules may result in removal from the group.*
 """
 
-
 async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle new member joining - Mute them and ask for registration"""
     if not update.message or not update.message.new_chat_members:
@@ -90,7 +89,8 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     'can_change_info': False,
                     'can_invite_users': False,
                     'can_pin_messages': False
-                }
+                },
+                until_date=int((datetime.now().timestamp() + 24 * 3600))  # 24 hours
             )
             print(f"✅ Successfully restricted user {username}")
         except Exception as e:
@@ -238,7 +238,7 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                     [
                         InlineKeyboardButton(
                             "❌ I DECLINE",
-                            callback_data="decline_declaration"
+                            callback_data=f"decline_declaration_{group_id}"
                         )
                     ]
                 ]
@@ -300,8 +300,8 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
             return
         
         # Verify registration
-        db.verify_registration(user_id, group_id)
-        print(f"✅ Verified registration for {username}")
+        success = db.verify_registration(user_id, group_id)
+        print(f"✅ Verified registration for {username}: {success}")
         
         # Try to get group info
         try:
@@ -312,6 +312,7 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
         
         # Unmute user in group
         try:
+            # First remove restrictions
             await context.bot.restrict_chat_member(
                 chat_id=group_id,
                 user_id=user_id,
@@ -384,18 +385,31 @@ async def handle_decline_declaration(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     await query.answer()
     
-    await query.edit_message_text(
-        "❌ *Registration Declined*\n\n"
-        "You have chosen not to accept the group declaration.\n"
-        "As a result, you will remain muted in the group.\n\n"
-        "If you change your mind, you can:\n"
-        "1. Click the registration button in the group again\n"
-        "2. Re-read the declaration\n"
-        "3. Accept to join the community\n\n"
-        "Thank you for your time!",
-        parse_mode="Markdown"
-    )
-    print(f"❌ User declined declaration")
+    if not query.data.startswith("decline_declaration_"):
+        return
+    
+    try:
+        group_id = int(query.data.split("_")[-1])
+        user_id = query.from_user.id
+        
+        # Remove registration record
+        db.db.registrations.delete_one({"user_id": user_id, "group_id": group_id})
+        
+        await query.edit_message_text(
+            "❌ *Registration Declined*\n\n"
+            "You have chosen not to accept the group declaration.\n"
+            "As a result, you will remain muted in the group.\n\n"
+            "If you change your mind, you can:\n"
+            "1. Click the registration button in the group again\n"
+            "2. Re-read the declaration\n"
+            "3. Accept to join the community\n\n"
+            "Thank you for your time!",
+            parse_mode="Markdown"
+        )
+        print(f"❌ User {user_id} declined declaration for group {group_id}")
+    
+    except Exception as e:
+        print(f"Error processing decline: {e}")
 
 
 async def handle_member_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -459,6 +473,7 @@ async def check_muted_users(context: ContextTypes.DEFAULT_TYPE):
                             ),
                             parse_mode="Markdown"
                         )
+                        print(f"⏰ Sent reminder to user {user_id}")
                     except:
                         pass  # User might have blocked bot
                 
@@ -473,6 +488,7 @@ async def check_muted_users(context: ContextTypes.DEFAULT_TYPE):
                             ),
                             parse_mode="Markdown"
                         )
+                        print(f"⚠️ Sent final reminder to user {user_id}")
                     except:
                         pass
     except Exception as e:
@@ -515,7 +531,7 @@ def setup_registration_handlers(application):
     # Callback for declining declaration in DM
     application.add_handler(CallbackQueryHandler(
         handle_decline_declaration,
-        pattern="^decline_declaration$"
+        pattern="^decline_declaration_"
     ))
     
     print("✅ Registration handlers setup complete")
