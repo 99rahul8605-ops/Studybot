@@ -1,3 +1,128 @@
+"""
+Command handlers for the bot
+"""
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
+from datetime import datetime
+
+from src.database import db
+from src.utils import is_admin, format_targets_message
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /start is issued in a group."""
+    if not update.message:
+        return
+    
+    chat_id = update.message.chat.id
+    chat_type = update.message.chat.type
+    
+    # Only respond in groups/supergroups
+    if chat_type not in ["group", "supergroup"]:
+        return  # Private chat handled by registration module
+    
+    # Check if group is allowed
+    if not db.is_group_allowed(chat_id):
+        # Set this group as allowed (first group that uses /start)
+        group_name = update.message.chat.title or f"Group_{chat_id}"
+        db.set_allowed_group(chat_id, group_name)
+        
+        # Create admin help buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("🛠 View Bot Commands", callback_data="admin_help"),
+                InlineKeyboardButton("📊 Bot Status", callback_data="admin_status")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ *Group Authorized!*\n\n"
+            f"This group ({group_name}) has been registered as the authorized group.\n"
+            f"Bot is now active here!\n\n"
+            f"🔐 *Registration System Enabled:*\n"
+            f"New members will be muted until they register via DM with the bot.\n\n"
+            f"*Bot Features:*\n"
+            f"• Daily target tracking\n"
+            f"• Sentence/Goal sharing\n"
+            f"• Member registration system\n"
+            f"• Progress monitoring\n\n"
+            f"*For bot commands:* /help",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+    
+    welcome_message = (
+        "🎯 *Target Tracker Bot*\n\n"
+        "I help track daily targets and goals for group members!\n\n"
+        "*Available Commands:*\n"
+        "📌 `/addtarget <target>` - Add your target for today\n"
+        "📌 `/mytarget` - Check your today's target\n"
+        "📌 `/today` - See all targets for today\n"
+        "📌 `/mytargets` - See your recent targets (last 7 days)\n"
+        "📌 `/done` - Mark today's target as completed\n\n"
+        "*Sentence/Goal Sharing:*\n"
+        "📝 `/addsentence <sentence>` - Share a goal or achievement\n"
+        "📚 `/sentences` - View all shared sentences\n"
+        "👤 `/mysentences` - View your sentences\n\n"
+        "*Admin Commands:*\n"
+        "🛠 `/reset` - Clear all bot data (testing only)\n"
+        "🛠 `/addtargetfor @username <target>` - Add target for a user\n"
+        "🛠 `/status` - Check bot status\n"
+        "🛠 `/help` - Show this help message\n\n"
+        "🔐 *New Members:*\n"
+        "New members will be muted and need to register via DM"
+    )
+    
+    await update.message.reply_text(welcome_message, parse_mode="Markdown")
+
+
+async def add_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add a target for today."""
+    if not update.message:
+        return
+    
+    group_id = update.message.chat.id
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or update.message.from_user.first_name
+    
+    # Check if group is allowed
+    if not db.is_group_allowed(group_id):
+        await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("❌ Please provide your target!\nUsage: /addtarget <your target>")
+        return
+    
+    target = " ".join(context.args)
+    
+    if db.add_target(group_id, user_id, username, target):
+        await update.message.reply_text(f"✅ Target added!\n📝 *Your Target:* {target}", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("❌ Failed to add target. Please try again.")
+
+
+async def add_target_for_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to add target for a specific user."""
+    if not update.message:
+        return
+    
+    group_id = update.message.chat.id
+    
+    # Check if group is allowed
+    if not db.is_group_allowed(group_id):
+        await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
+        return
+    
+    # Check if user is admin
+    if not await is_admin(update, context):
+        await update.message.reply_text("🚫 This command is for admins only!")
+        return
+    
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Usage: /addtargetfor @username <target>")
+        return
     
     # Extract username (remove @ if present)
     username = context.args[0].lstrip('@')
@@ -10,6 +135,7 @@
         await update.message.reply_text(f"✅ Target added for @{username}!\n📝 *Target:* {target}", parse_mode="Markdown")
     else:
         await update.message.reply_text("❌ Failed to add target.")
+
 
 async def my_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user's target for today."""
@@ -42,6 +168,7 @@ async def my_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode="Markdown")
 
+
 async def today_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show all targets for today."""
     if not update.message:
@@ -62,6 +189,7 @@ async def today_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message = format_targets_message(targets)
     await update.message.reply_text(message, parse_mode="Markdown")
+
 
 async def my_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user's recent targets."""
@@ -92,6 +220,7 @@ async def my_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode="Markdown")
 
+
 async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mark today's target as completed."""
     if not update.message:
@@ -120,6 +249,7 @@ async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🎉 Congratulations @{username}! Target marked as completed!")
     else:
         await update.message.reply_text("❌ Failed to mark target as completed.")
+
 
 async def reset_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reset all bot data (admin only)."""
@@ -154,6 +284,7 @@ async def reset_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+
 async def reset_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle reset confirmation callback."""
     query = update.callback_query
@@ -167,6 +298,7 @@ async def reset_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Failed to reset data.")
     else:
         await query.edit_message_text("Reset cancelled.")
+
 
 async def bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show bot status (admin only)."""
@@ -215,6 +347,7 @@ async def bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(status_message, parse_mode="Markdown")
 
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a help message."""
     if not update.message:
@@ -228,25 +361,56 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     help_text = (
-        "🎯 *Target Tracker Bot Help*\n\n"
-        "*User Commands:*\n"
-        "📌 /addtarget <target> - Add your daily target\n"
+        "🎯 *Target Tracker Bot - Complete Help*\n\n"
+        
+        "*📋 REGISTRATION:*\n"
+        "New members must accept declaration in DM\n"
+        "Click registration button in group to start\n\n"
+        
+        "*🎯 TARGET COMMANDS:*\n"
+        "📌 /addtarget <target> - Add daily target\n"
         "📌 /mytarget - View your today's target\n"
         "📌 /today - View all targets for today\n"
         "📌 /mytargets - View your recent targets\n"
-        "📌 /done - Mark your target as completed\n\n"
-        "*Admin Commands:*\n"
-        "🛠 /addtargetfor @username <target> - Add target for a user\n"
-        "🛠 /reset - Reset all bot data\n"
-        "🛠 /status - Check bot status\n"
-        "🛠 /help - Show this help message\n\n"
-        "*Registration System:*\n"
-        "🔐 New members are muted until they register via DM\n"
-        "📝 Click registration button to start\n\n"
-        "*Note:* This bot only works in the authorized group!"
+        "📌 /done - Mark target as completed\n\n"
+        
+        "*📝 SENTENCE COMMANDS:*\n"
+        "📖 /addsentence <text> - Add sentence with category\n"
+        "📖 /sentences - View all sentences\n"
+        "📖 /mysentences - View your sentences\n"
+        "📖 Use #hashtag for categories\n\n"
+        
+        "*🛠 ADMIN COMMANDS:*\n"
+        "⚙️ /addtargetfor @user <target> - Add target for user\n"
+        "⚙️ /reset - Reset all bot data\n"
+        "⚙️ /status - Check bot status\n"
+        "⚙️ /help - Show this help\n\n"
+        
+        "*🔐 REGISTRATION SYSTEM:*\n"
+        "New members are muted until they:\n"
+        "1. Click registration button\n"
+        "2. Accept declaration in DM\n"
+        "3. Auto-unmute after acceptance\n\n"
+        
+        "*🏷️ SENTENCE CATEGORIES:*\n"
+        "Use hashtags: #fitness #learning #work #personal #other\n"
+        "Or create your own with #yourcategory"
     )
     
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 Registration Demo", callback_data="help_registration"),
+            InlineKeyboardButton("🎯 Target Demo", callback_data="help_target")
+        ],
+        [
+            InlineKeyboardButton("📝 Sentence Demo", callback_data="help_sentence"),
+            InlineKeyboardButton("🛠 Admin Panel", callback_data="help_admin")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(help_text, parse_mode="Markdown", reply_markup=reply_markup)
+
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle regular messages in groups."""
@@ -273,12 +437,12 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     
                     # Send reminder
                     registration = db.get_registration(user_id, group_id)
-                    if registration and registration.get('verification_code'):
+                    if registration:
                         await context.bot.send_message(
                             chat_id=group_id,
                             text=f"⚠️ @{update.message.from_user.username or update.message.from_user.first_name}, "
                                  f"you need to register first!\n"
-                                 f"Check your DM for verification code: `{registration['verification_code']}`",
+                                 f"Click the registration button to complete your registration.",
                         )
                 except Exception as e:
                     print(f"Couldn't delete message: {e}")
@@ -292,6 +456,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text(
                 "🎯 Don't forget to set your daily target with /addtarget !"
             )
+
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Log errors."""
