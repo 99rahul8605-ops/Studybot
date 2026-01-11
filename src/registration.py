@@ -3,7 +3,7 @@ Registration module for new members with inline button declaration acceptance
 """
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, CommandHandler
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 from src.database import db
@@ -72,12 +72,13 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         print(f"📝 Created registration record for {username}")
         
-        # Mute the user (24 hours timeout)
-        db.mute_user(user_id, group_id, hours=24)
-        print(f"🔇 Muted user {username} for 24 hours")
+        # Mute the user permanently (until they register)
+        db.mute_user(user_id, group_id)
+        print(f"🔇 Permanently muted user {username} until registration")
         
-        # Try to restrict user (requires admin permissions)
+        # Try to restrict user permanently (requires admin permissions)
         try:
+            # Restrict user permanently (no until_date = permanent)
             await context.bot.restrict_chat_member(
                 chat_id=group_id,
                 user_id=user_id,
@@ -90,10 +91,10 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     'can_change_info': False,
                     'can_invite_users': False,
                     'can_pin_messages': False
-                },
-                until_date=int((datetime.now().timestamp() + 24 * 3600))  # 24 hours
+                }
+                # No until_date = permanent restriction
             )
-            print(f"✅ Successfully restricted user {username}")
+            print(f"✅ Successfully restricted user {username} permanently")
         except Exception as e:
             print(f"⚠️ Could not restrict user (bot needs admin): {e}")
             await update.message.reply_text(
@@ -150,7 +151,7 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "1. Click the button below to open DM with bot\n"
             "2. Read and accept the group declaration\n"
             "3. You'll be automatically unmuted\n\n"
-            "⏰ *Time Limit:* 24 hours\n"
+            "🔒 *Important:* You will remain muted until you complete registration.\n"
             "🔐 *Click the button below to start registration*"
         )
         
@@ -401,7 +402,8 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
                 f"Once unmuted, you can:\n"
                 f"• Set targets with `/addtarget`\n"
                 f"• Track progress with `/today`\n"
-                f"• Share sentences with `/addsentence`"
+                f"• Share sentences with `/addsentence`",
+                parse_mode="Markdown"
             )
     
     except (ValueError, IndexError) as e:
@@ -423,6 +425,9 @@ async def handle_decline_declaration(update: Update, context: ContextTypes.DEFAU
         
         # Remove registration record
         db.db.registrations.delete_one({"user_id": user_id, "group_id": group_id})
+        
+        # Also remove mute record
+        db.unmute_user(user_id, group_id)
         
         await query.edit_message_text(
             "❌ *Registration Declined*\n\n"
@@ -453,7 +458,7 @@ async def handle_member_left(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if left_member.id == context.bot.id:
         return
     
-    # User left, mark registration as inactive
+    # User left, remove mute record
     db.unmute_user(left_member.id, group_id)
     
     # Update registration status
@@ -475,51 +480,59 @@ async def check_muted_users(context: ContextTypes.DEFAULT_TYPE):
             return
         
         group_id = group['group_id']
-        muted_users = db.get_muted_users(group_id)
+        pending_registrations = db.get_pending_registrations(group_id)
         
-        for mute_record in muted_users:
-            user_id = mute_record['user_id']
-            registration = db.get_registration(user_id, group_id)
+        for registration in pending_registrations:
+            user_id = registration['user_id']
+            username = registration.get('username', f"User_{user_id}")
             
-            if registration and registration['status'] == 'pending':
-                # Calculate remaining time
-                remaining = mute_record['muted_until'] - datetime.now()
-                hours = int(remaining.total_seconds() // 3600)
-                minutes = int((remaining.total_seconds() % 3600) // 60)
-                
-                # Send reminder at 12 hours, 6 hours, 3 hours, 1 hour, and 30 minutes
-                if hours == 12 or hours == 6 or hours == 3 or hours == 1:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"⏰ *REGISTRATION REMINDER*\n\n"
-                                f"Your registration expires in {hours} hours!\n\n"
-                                f"*To complete registration:*\n"
-                                f"1. Click the registration button in the group\n"
-                                f"2. Read and accept the declaration in DM\n\n"
-                                f"*Note:* If you don't register in time, you'll be removed from the group."
-                            ),
-                            parse_mode="Markdown"
-                        )
-                        print(f"⏰ Sent reminder to user {user_id}")
-                    except:
-                        pass  # User might have blocked bot
-                
-                if hours == 0 and minutes == 30:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"⚠️ *FINAL REGISTRATION REMINDER*\n\n"
-                                f"Your registration expires in {minutes} minutes!\n\n"
-                                f"*Hurry!* Click the registration button in the group now!"
-                            ),
-                            parse_mode="Markdown"
-                        )
-                        print(f"⚠️ Sent final reminder to user {user_id}")
-                    except:
-                        pass
+            # Calculate time since registration
+            time_since_registration = datetime.now() - registration['created_at']
+            hours = int(time_since_registration.total_seconds() // 3600)
+            minutes = int((time_since_registration.total_seconds() % 3600) // 60)
+            
+            # Send reminders at specific intervals
+            reminder_sent = False
+            
+            # First 24 hours: reminders at 1, 6, 12, 18, 23 hours
+            if hours < 24:
+                if hours in [1, 6, 12, 18, 23]:
+                    reminder_text = (
+                        f"⏰ *REGISTRATION REMINDER*\n\n"
+                        f"You've been in the group for {hours} hours.\n\n"
+                        f"*To complete registration:*\n"
+                        f"1. Click the registration button in the group\n"
+                        f"2. Read and accept the declaration in DM\n\n"
+                        f"*Note:* You will remain muted until you register."
+                    )
+                    reminder_sent = True
+            # After 24 hours: reminders every 12 hours
+            else:
+                # Send reminder every 12 hours
+                if hours % 12 == 0:
+                    reminder_text = (
+                        f"⏰ *REGISTRATION REMINDER*\n\n"
+                        f"You've been in the group for {hours} hours.\n"
+                        f"You are still muted until you complete registration.\n\n"
+                        f"*To complete registration:*\n"
+                        f"1. Click the registration button in the group\n"
+                        f"2. Read and accept the declaration in DM\n\n"
+                        f"*Note:* You will remain muted until you register."
+                    )
+                    reminder_sent = True
+            
+            # Send reminder if needed
+            if reminder_sent:
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=reminder_text,
+                        parse_mode="Markdown"
+                    )
+                    print(f"⏰ Sent reminder to user {user_id} after {hours} hours")
+                except Exception as e:
+                    print(f"⚠️ Could not send reminder to user {user_id}: {e}")
+                    
     except Exception as e:
         print(f"Error in check_muted_users: {e}")
 
