@@ -7,7 +7,7 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
         sync: false
@@ -17,7 +17,5 @@ services:
         value: telegram_target_bot
       - key: PORT
         value: 8080
-    headers:
-      - path: /*
-        name: X-Content-Type-Options
-        value: nosniff
+      - key: PYTHON_VERSION
+        value: 3.11.0
