@@ -4,10 +4,10 @@ from datetime import datetime, timedelta
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from dotenv import load_dotenv
-import random
-import string
+from bson import ObjectId
 
 load_dotenv()
+
 
 class MongoDB:
     def __init__(self):
@@ -164,14 +164,14 @@ class MongoDB:
         """Like a sentence"""
         try:
             # Check if already liked
-            sentence = self.db.sentences.find_one({"_id": sentence_id})
+            sentence = self.db.sentences.find_one({"_id": ObjectId(sentence_id)})
             if not sentence:
                 return False
             
             if user_id in sentence.get("liked_by", []):
                 # Unlike
                 result = self.db.sentences.update_one(
-                    {"_id": sentence_id},
+                    {"_id": ObjectId(sentence_id)},
                     {
                         "$inc": {"likes": -1},
                         "$pull": {"liked_by": user_id}
@@ -181,7 +181,7 @@ class MongoDB:
             else:
                 # Like
                 result = self.db.sentences.update_one(
-                    {"_id": sentence_id},
+                    {"_id": ObjectId(sentence_id)},
                     {
                         "$inc": {"likes": 1},
                         "$push": {"liked_by": user_id}
@@ -225,27 +225,26 @@ class MongoDB:
     # === REGISTRATION FUNCTIONS ===
     
     def create_registration(self, user_id: int, group_id: int, username: str = None):
-    """Create a new registration record for user"""
-    registration_data = {
-        "user_id": user_id,
-        "group_id": group_id,
-        "username": username,
-        "status": "pending",
-        "created_at": datetime.now(),
-        "updated_at": datetime.now()
-    }
-    
-    try:
-        result = self.db.registrations.update_one(
-            {"user_id": user_id, "group_id": group_id},
-            {"$set": registration_data},
-            upsert=True
-        )
-        return result.acknowledged  # Return True if successful
-    except Exception as e:
-        print(f"Error creating registration: {e}")
-        return None
-    
+        """Create a new registration record for user"""
+        registration_data = {
+            "user_id": user_id,
+            "group_id": group_id,
+            "username": username,
+            "status": "pending",
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
+        }
+        
+        try:
+            result = self.db.registrations.update_one(
+                {"user_id": user_id, "group_id": group_id},
+                {"$set": registration_data},
+                upsert=True
+            )
+            return result.acknowledged  # Return True if successful
+        except Exception as e:
+            print(f"Error creating registration: {e}")
+            return None
     
     def get_registration(self, user_id: int, group_id: int):
         """Get registration data for user"""
@@ -384,6 +383,7 @@ class MongoDB:
         """Close MongoDB connection"""
         if self.client:
             self.client.close()
+
 
 # Global database instance
 db = MongoDB()
