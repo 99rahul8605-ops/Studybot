@@ -32,6 +32,7 @@ def main():
         handle_group_message, error_handler
     )
     from src.registration import setup_registration_handlers, check_muted_users
+    from src.sentences import setup_sentence_handlers
     from health_check import start_health_server
     
     # Start health check server in background
@@ -61,6 +62,9 @@ def main():
     # Setup registration handlers
     setup_registration_handlers(application)
     
+    # Setup sentence handlers
+    setup_sentence_handlers(application)
+    
     # Register error handler
     application.add_error_handler(error_handler)
     
@@ -71,7 +75,7 @@ def main():
     
     # Start the Bot
     print("=" * 60)
-    print("🤖 Starting Target Tracker Bot with Registration Feature")
+    print("🤖 Starting Target Tracker Bot with Enhanced Features")
     print("=" * 60)
     print(f"✅ Bot Token: {'✓ Set' if BOT_TOKEN else '✗ Missing'}")
     print(f"✅ MongoDB: {'Connected ✓' if db.client else 'Not Connected ✗'}")
@@ -86,22 +90,20 @@ def main():
     
     print("=" * 60)
     print("📋 Available Features:")
-    print("  ✅ Target Tracking")
-    print("  ✅ Member Registration with Mute")
-    print("  ✅ Verification System")
-    print("  ✅ Auto-unmute after verification")
+    print("  ✅ Declaration-based Registration")
+    print("  ✅ Sentence/Target System")
+    print("  ✅ Category-based Organization")
+    print("  ✅ Like System for Sentences")
     print("=" * 60)
     print("📋 Group Commands:")
     print("  /start - Initialize bot in group")
     print("  /addtarget <target> - Add daily target")
-    print("  /mytarget - View your target")
-    print("  /today - View all targets")
+    print("  /addsentence <sentence> - Add sentence with category")
+    print("  /sentences - View all sentences")
+    print("  /mysentences - View your sentences")
     print("  /reset - Reset all data (admin)")
     print("=" * 60)
-    print("📋 Private Chat Commands:")
-    print("  /verify <code> - Verify registration")
-    print("=" * 60)
-    print("🔐 New members will be muted until they register via DM")
+    print("🔐 New members must accept declaration in DM")
     print("=" * 60)
     
     # Run the bot
