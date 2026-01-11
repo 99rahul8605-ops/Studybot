@@ -225,26 +225,27 @@ class MongoDB:
     # === REGISTRATION FUNCTIONS ===
     
     def create_registration(self, user_id: int, group_id: int, username: str = None):
-        """Create a new registration record for user"""
-        registration_data = {
-            "user_id": user_id,
-            "group_id": group_id,
-            "username": username,
-            "status": "pending",
-            "created_at": datetime.now(),
-            "updated_at": datetime.now()
-        }
-        
-        try:
-            self.db.registrations.update_one(
-                {"user_id": user_id, "group_id": group_id},
-                {"$set": registration_data},
-                upsert=True
-            )
-            return True
-        except Exception as e:
-            print(f"Error creating registration: {e}")
-            return False
+    """Create a new registration record for user"""
+    registration_data = {
+        "user_id": user_id,
+        "group_id": group_id,
+        "username": username,
+        "status": "pending",
+        "created_at": datetime.now(),
+        "updated_at": datetime.now()
+    }
+    
+    try:
+        result = self.db.registrations.update_one(
+            {"user_id": user_id, "group_id": group_id},
+            {"$set": registration_data},
+            upsert=True
+        )
+        return result.acknowledged  # Return True if successful
+    except Exception as e:
+        print(f"Error creating registration: {e}")
+        return None
+    
     
     def get_registration(self, user_id: int, group_id: int):
         """Get registration data for user"""
