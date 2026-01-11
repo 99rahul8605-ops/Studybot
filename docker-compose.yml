@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: telegram-target-bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017/}
+      - DB_NAME=${DB_NAME:-telegram_target_bot}
+    depends_on:
+      - mongo
+    volumes:
+      - ./data:/app/data
+    networks:
+      - bot-network
+
+  mongo:
+    image: mongo:6-jammy
+    container_name: telegram-bot-mongo
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_DATABASE=${DB_NAME:-telegram_target_bot}
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    ports:
+      - "27017:27017"
+    networks:
+      - bot-network
+
+  mongo-express:
+    image: mongo-express:latest
+    container_name: mongo-express
+    restart: unless-stopped
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongo
+      - ME_CONFIG_MONGODB_PORT=27017
+      - ME_CONFIG_BASICAUTH_USERNAME=${MONGO_EXPRESS_USERNAME:-admin}
+      - ME_CONFIG_BASICAUTH_PASSWORD=${MONGO_EXPRESS_PASSWORD:-admin123}
+    ports:
+      - "8081:8081"
+    depends_on:
+      - mongo
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
