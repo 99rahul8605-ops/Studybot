@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ ./src/
-COPY main.py .
+COPY bot.py .
 COPY health_check.py .
 
 # Create non-root user
@@ -34,4 +34,4 @@ ENV PORT=8080
 EXPOSE 8080
 
 # Run both health check server and bot
-CMD ["sh", "-c", "python health_check.py & python main.py"]
+CMD ["sh", "-c", "python health_check.py & python bot.py"]
