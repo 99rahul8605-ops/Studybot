@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from dotenv import load_dotenv
+import random
+import string
 
 load_dotenv()
 
@@ -46,12 +48,22 @@ class MongoDB:
         if "registrations" not in collections:
             self.db.create_collection("registrations")
             self.db.registrations.create_index([("user_id", 1), ("group_id", 1)], unique=True)
-            self.db.registrations.create_index("verification_code")
         
         if "muted_users" not in collections:
             self.db.create_collection("muted_users")
             self.db.muted_users.create_index([("user_id", 1), ("group_id", 1)], unique=True)
             self.db.muted_users.create_index("muted_until", expireAfterSeconds=0)
+        
+        if "sentences" not in collections:
+            self.db.create_collection("sentences")
+            self.db.sentences.create_index([("user_id", 1), ("group_id", 1)])
+            self.db.sentences.create_index("created_at")
+        
+        if "sentence_categories" not in collections:
+            self.db.create_collection("sentence_categories")
+            self.db.sentence_categories.create_index([("group_id", 1), ("name", 1)], unique=True)
+    
+    # === TARGET FUNCTIONS ===
     
     def add_target(self, group_id: int, user_id: int, username: str, target: str, date: datetime = None):
         """Add a target for a user on a specific date"""
@@ -110,61 +122,114 @@ class MongoDB:
             {"$set": {"completed": True, "completed_at": datetime.now()}}
         )
     
-    def reset_all_data(self, group_id: int = None):
-        """Reset all data (for testing)"""
+    # === SENTENCE FUNCTIONS ===
+    
+    def add_sentence(self, group_id: int, user_id: int, username: str, sentence: str, category: str = "general"):
+        """Add a sentence for a user"""
+        sentence_data = {
+            "group_id": group_id,
+            "user_id": user_id,
+            "username": username,
+            "sentence": sentence,
+            "category": category,
+            "created_at": datetime.now(),
+            "likes": 0,
+            "liked_by": []
+        }
+        
         try:
-            if group_id:
-                self.db.targets.delete_many({"group_id": group_id})
-                self.db.group_settings.delete_one({"group_id": group_id})
-                self.db.registrations.delete_many({"group_id": group_id})
-                self.db.muted_users.delete_many({"group_id": group_id})
-            else:
-                self.db.targets.delete_many({})
-                self.db.group_settings.delete_many({})
-                self.db.registrations.delete_many({})
-                self.db.muted_users.delete_many({})
-            return True
+            result = self.db.sentences.insert_one(sentence_data)
+            return str(result.inserted_id)
         except Exception as e:
-            print(f"Error resetting data: {e}")
+            print(f"Error adding sentence: {e}")
+            return None
+    
+    def get_user_sentences(self, user_id: int, group_id: int = None, limit: int = 10):
+        """Get sentences for a user"""
+        query = {"user_id": user_id}
+        if group_id:
+            query["group_id"] = group_id
+        
+        return list(self.db.sentences.find(query).sort("created_at", -1).limit(limit))
+    
+    def get_group_sentences(self, group_id: int, category: str = None, limit: int = 20):
+        """Get recent sentences for a group"""
+        query = {"group_id": group_id}
+        if category and category != "all":
+            query["category"] = category
+        
+        return list(self.db.sentences.find(query).sort("created_at", -1).limit(limit))
+    
+    def like_sentence(self, sentence_id: str, user_id: int):
+        """Like a sentence"""
+        try:
+            # Check if already liked
+            sentence = self.db.sentences.find_one({"_id": sentence_id})
+            if not sentence:
+                return False
+            
+            if user_id in sentence.get("liked_by", []):
+                # Unlike
+                result = self.db.sentences.update_one(
+                    {"_id": sentence_id},
+                    {
+                        "$inc": {"likes": -1},
+                        "$pull": {"liked_by": user_id}
+                    }
+                )
+                return result.modified_count > 0
+            else:
+                # Like
+                result = self.db.sentences.update_one(
+                    {"_id": sentence_id},
+                    {
+                        "$inc": {"likes": 1},
+                        "$push": {"liked_by": user_id}
+                    }
+                )
+                return result.modified_count > 0
+        except Exception as e:
+            print(f"Error liking sentence: {e}")
             return False
     
-    def set_allowed_group(self, group_id: int, group_name: str):
-        """Set the allowed group for the bot"""
-        self.db.group_settings.update_one(
-            {"group_id": group_id},
-            {"$set": {
-                "group_id": group_id,
-                "group_name": group_name,
-                "updated_at": datetime.now()
-            }},
-            upsert=True
-        )
-    
-    def is_group_allowed(self, group_id: int) -> bool:
-        """Check if a group is allowed"""
-        # If no groups are set, allow all (for initial setup)
-        count = self.db.group_settings.count_documents({})
-        if count == 0:
-            return True
+    def get_sentence_categories(self, group_id: int):
+        """Get all sentence categories for a group"""
+        pipeline = [
+            {"$match": {"group_id": group_id}},
+            {"$group": {"_id": "$category", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}}
+        ]
         
-        return self.db.group_settings.find_one({"group_id": group_id}) is not None
+        categories = list(self.db.sentences.aggregate(pipeline))
+        return [{"name": cat["_id"], "count": cat["count"]} for cat in categories]
     
-    def get_allowed_group(self):
-        """Get the allowed group info"""
-        return self.db.group_settings.find_one()
+    def add_sentence_category(self, group_id: int, category_name: str):
+        """Add a new sentence category"""
+        category_data = {
+            "group_id": group_id,
+            "name": category_name,
+            "created_at": datetime.now()
+        }
+        
+        try:
+            self.db.sentence_categories.update_one(
+                {"group_id": group_id, "name": category_name},
+                {"$set": category_data},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            print(f"Error adding category: {e}")
+            return False
     
-    # New Registration Functions
+    # === REGISTRATION FUNCTIONS ===
     
     def create_registration(self, user_id: int, group_id: int, username: str = None):
         """Create a new registration record for user"""
-        import secrets
-        verification_code = secrets.token_hex(3).upper()  # 6-character code
-        
         registration_data = {
             "user_id": user_id,
             "group_id": group_id,
             "username": username,
-            "verification_code": verification_code,
             "status": "pending",
             "created_at": datetime.now(),
             "updated_at": datetime.now()
@@ -176,22 +241,20 @@ class MongoDB:
                 {"$set": registration_data},
                 upsert=True
             )
-            return verification_code
+            return True
         except Exception as e:
             print(f"Error creating registration: {e}")
-            return None
+            return False
     
     def get_registration(self, user_id: int, group_id: int):
         """Get registration data for user"""
         return self.db.registrations.find_one({"user_id": user_id, "group_id": group_id})
     
-    def verify_registration(self, user_id: int, group_id: int, code: str) -> bool:
-        """Verify registration code"""
+    def verify_registration(self, user_id: int, group_id: int):
+        """Verify registration"""
         registration = self.db.registrations.find_one({
             "user_id": user_id,
-            "group_id": group_id,
-            "verification_code": code,
-            "status": "pending"
+            "group_id": group_id
         })
         
         if registration:
@@ -219,7 +282,7 @@ class MongoDB:
         })
         return registration is not None
     
-    # Mute Functions
+    # === MUTE FUNCTIONS ===
     
     def mute_user(self, user_id: int, group_id: int, hours: int = 24):
         """Mute user for specified hours"""
@@ -264,6 +327,57 @@ class MongoDB:
             "group_id": group_id,
             "muted_until": {"$gt": datetime.now()}
         }))
+    
+    # === GROUP SETTINGS FUNCTIONS ===
+    
+    def set_allowed_group(self, group_id: int, group_name: str):
+        """Set the allowed group for the bot"""
+        self.db.group_settings.update_one(
+            {"group_id": group_id},
+            {"$set": {
+                "group_id": group_id,
+                "group_name": group_name,
+                "updated_at": datetime.now()
+            }},
+            upsert=True
+        )
+    
+    def is_group_allowed(self, group_id: int) -> bool:
+        """Check if a group is allowed"""
+        # If no groups are set, allow all (for initial setup)
+        count = self.db.group_settings.count_documents({})
+        if count == 0:
+            return True
+        
+        return self.db.group_settings.find_one({"group_id": group_id}) is not None
+    
+    def get_allowed_group(self):
+        """Get the allowed group info"""
+        return self.db.group_settings.find_one()
+    
+    # === RESET FUNCTION ===
+    
+    def reset_all_data(self, group_id: int = None):
+        """Reset all data (for testing)"""
+        try:
+            if group_id:
+                self.db.targets.delete_many({"group_id": group_id})
+                self.db.group_settings.delete_one({"group_id": group_id})
+                self.db.registrations.delete_many({"group_id": group_id})
+                self.db.muted_users.delete_many({"group_id": group_id})
+                self.db.sentences.delete_many({"group_id": group_id})
+                self.db.sentence_categories.delete_many({"group_id": group_id})
+            else:
+                self.db.targets.delete_many({})
+                self.db.group_settings.delete_many({})
+                self.db.registrations.delete_many({})
+                self.db.muted_users.delete_many({})
+                self.db.sentences.delete_many({})
+                self.db.sentence_categories.delete_many({})
+            return True
+        except Exception as e:
+            print(f"Error resetting data: {e}")
+            return False
     
     def close(self):
         """Close MongoDB connection"""
