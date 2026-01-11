@@ -46,11 +46,6 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     print("✅ Application created")
     
-    # Get bot info
-    bot = application.bot
-    print(f"🤖 Bot Username: @{bot.username}")
-    print(f"🤖 Bot Name: {bot.first_name}")
-    
     # Register command handlers for groups
     application.add_handler(CommandHandler("start", start, filters=filters.ChatType.GROUP | filters.ChatType.SUPERGROUP))
     application.add_handler(CommandHandler("help", help_command))
@@ -108,9 +103,6 @@ def main():
     print("     • Delete messages")
     print("     • Restrict members")
     print("     • Ban members")
-    print("=" * 60)
-    print("📝 Registration URL Format:")
-    print(f"  https://t.me/{bot.username}?start=register_GROUP_ID")
     print("=" * 60)
     print("🚀 Bot is starting...")
     
