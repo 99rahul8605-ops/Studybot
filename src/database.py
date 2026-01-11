@@ -58,7 +58,7 @@ class MongoDB:
         }
         
         try:
-            self.db.targets.update_one(
+            result = self.db.targets.update_one(
                 {"user_id": user_id, "date": date},
                 {"$set": target_data},
                 upsert=True
