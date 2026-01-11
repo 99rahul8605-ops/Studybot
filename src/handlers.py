@@ -431,22 +431,29 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         if not db.is_user_verified(user_id, group_id):
             # User is not verified, check if they're muted
             if db.is_user_muted(user_id, group_id):
-                # User is still muted, delete their message
+                # User is still muted, try to delete their message
                 try:
                     await update.message.delete()
+                    print(f"🗑️ Deleted message from unverified user {user_id}")
                     
-                    # Send reminder
-                    registration = db.get_registration(user_id, group_id)
-                    if registration:
+                    # Send reminder to user
+                    try:
                         await context.bot.send_message(
-                            chat_id=group_id,
-                            text=f"⚠️ @{update.message.from_user.username or update.message.from_user.first_name}, "
-                                 f"you need to register first!\n"
-                                 f"Click the registration button to complete your registration.",
+                            chat_id=user_id,
+                            text=(
+                                "⚠️ *You are not registered yet!*\n\n"
+                                "You need to complete registration before you can send messages.\n"
+                                "Check the group for the registration button."
+                            ),
+                            parse_mode="Markdown"
                         )
+                    except:
+                        pass  # User might have blocked bot
                 except Exception as e:
-                    print(f"Couldn't delete message: {e}")
+                    print(f"Couldn't delete message from unverified user: {e}")
             return
+        
+        # Verified users can continue
         
         # You can add additional message handling here
         # For example, reacting to certain keywords
