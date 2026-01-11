@@ -203,23 +203,6 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                 group_id = int(arg.split("_")[1])
                 print(f"📝 Registration attempt for group {group_id} by {username}")
                 
-                # Check if user is in this group
-                try:
-                    chat_member = await context.bot.get_chat_member(group_id, user_id)
-                    if chat_member.status not in ['member', 'administrator', 'creator']:
-                        await update.message.reply_text(
-                            "❌ You must be a member of the group to register.\n"
-                            "Please join the group first and try again."
-                        )
-                        return
-                except Exception as e:
-                    print(f"❌ User not in group: {e}")
-                    await update.message.reply_text(
-                        "❌ You must be a member of the group to register.\n"
-                        "Please join the group first and try again."
-                    )
-                    return
-                
                 # Check if user is already verified
                 if db.is_user_verified(user_id, group_id):
                     await update.message.reply_text(
@@ -232,7 +215,21 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                 registration = db.get_registration(user_id, group_id)
                 if not registration:
                     await update.message.reply_text(
-                        "❌ No registration found. Please use the registration button in the group."
+                        "❌ No pending registration found.\n\n"
+                        "*Possible reasons:*\n"
+                        "• Registration link expired\n"
+                        "• You already completed registration\n"
+                        "• You need to click the registration button in the group again\n\n"
+                        "Please return to the group and click the registration button.",
+                        parse_mode="Markdown"
+                    )
+                    return
+                
+                # Check if registration is still pending
+                if registration.get('status') != 'pending':
+                    await update.message.reply_text(
+                        f"❌ Your registration status is: {registration.get('status', 'unknown')}\n"
+                        "Please use the registration button in the group again."
                     )
                     return
                 
@@ -317,6 +314,14 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
             )
             return
         
+        # Check if registration is still pending
+        if registration.get('status') != 'pending':
+            await query.edit_message_text(
+                f"❌ Registration status is already: {registration.get('status', 'unknown')}\n"
+                "You cannot accept the declaration again."
+            )
+            return
+        
         # Verify registration
         success = db.verify_registration(user_id, group_id)
         print(f"✅ Verified registration for {username}: {success}")
@@ -328,9 +333,9 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
         except:
             group_name = f"Group {group_id}"
         
-        # Unmute user in group
+        # Try to unmute user in group
         try:
-            # First remove restrictions
+            # Remove restrictions
             await context.bot.restrict_chat_member(
                 chat_id=group_id,
                 user_id=user_id,
@@ -387,10 +392,16 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
                 
         except Exception as e:
             print(f"❌ Error unmuting user: {e}")
+            # Still update registration status even if unmute fails
             await query.edit_message_text(
-                "✅ Declaration accepted!\n"
-                "But I couldn't unmute you automatically (bot might not be admin).\n"
-                "Please ask an admin to unmute you in the group."
+                f"✅ Declaration accepted!\n"
+                f"✅ You are now verified in *{group_name}*\n\n"
+                f"⚠️ *Note:* I couldn't unmute you automatically (bot might not be admin).\n"
+                f"Please ask an admin to unmute you in the group.\n\n"
+                f"Once unmuted, you can:\n"
+                f"• Set targets with `/addtarget`\n"
+                f"• Track progress with `/today`\n"
+                f"• Share sentences with `/addsentence`"
             )
     
     except (ValueError, IndexError) as e:
