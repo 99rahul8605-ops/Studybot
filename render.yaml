@@ -2,12 +2,12 @@ services:
   - type: web
     name: telegram-target-bot
     env: python
-    region: singapore  # or choose closest to you: oregon, frankfurt, etc.
+    region: singapore
     plan: free
     healthCheckPath: /health
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    startCommand: gunicorn health_check:run_health_server & python main.py
     envVars:
       - key: BOT_TOKEN
         sync: false
@@ -17,3 +17,5 @@ services:
         value: telegram_target_bot
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: PORT
+        value: 8080
