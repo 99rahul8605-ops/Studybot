@@ -2,12 +2,14 @@
 Registration module for new members with inline button declaration acceptance
 """
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, CommandHandler
+from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters
 from datetime import datetime
-import re
-import json
+import logging
 
 from src.database import db
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Declaration text that users must accept
 DECLARATION_TEXT = """📋 *GROUP DECLARATION & RULES*
@@ -26,15 +28,18 @@ By joining this group, you agree to:
 *Violation of these rules may result in removal from the group.*
 """
 
+
 async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle new member joining with declaration system"""
+    """Handle new member joining - Mute them and ask for registration"""
     if not update.message or not update.message.new_chat_members:
         return
     
     group_id = update.message.chat.id
+    print(f"👥 New member event in group {group_id}")
     
     # Check if group is allowed
     if not db.is_group_allowed(group_id):
+        print(f"❌ Group {group_id} not allowed")
         return
     
     for new_member in update.message.new_chat_members:
@@ -45,7 +50,7 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = new_member.id
         username = new_member.username or new_member.first_name
         
-        print(f"👤 New member joined: {username} (ID: {user_id}) in group {group_id}")
+        print(f"👤 New member: {username} (ID: {user_id}) in group {group_id}")
         
         # Check if user is already verified
         if db.is_user_verified(user_id, group_id):
@@ -56,16 +61,20 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
         
         # Create registration record
-        registration_id = db.create_registration(user_id, group_id, username)
+        registration_success = db.create_registration(user_id, group_id, username)
         
-        if not registration_id:
+        if not registration_success:
+            print(f"❌ Failed to create registration for {username}")
             await update.message.reply_text(
                 f"❌ Failed to create registration for @{username}. Please contact admin."
             )
             continue
         
-        # Mute the user
+        print(f"📝 Created registration record for {username}")
+        
+        # Mute the user (24 hours timeout)
         db.mute_user(user_id, group_id, hours=24)
+        print(f"🔇 Muted user {username} for 24 hours")
         
         # Try to restrict user (requires admin permissions)
         try:
@@ -83,16 +92,28 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     'can_pin_messages': False
                 }
             )
-            print(f"🔇 Muted user {username}")
+            print(f"✅ Successfully restricted user {username}")
         except Exception as e:
-            print(f"⚠️ Could not mute user (bot needs admin): {e}")
+            print(f"⚠️ Could not restrict user (bot needs admin): {e}")
+            await update.message.reply_text(
+                "⚠️ *Bot Warning:* I need admin permissions to mute new members!\n"
+                "Please make me an admin with:\n"
+                "• Delete messages\n"
+                "• Restrict members\n"
+                "• Ban members",
+                parse_mode="Markdown"
+            )
+            continue
         
         # Create registration button
+        bot_username = context.bot.username
+        registration_link = f"https://t.me/{bot_username}?start=register_{group_id}"
+        
         keyboard = [
             [
                 InlineKeyboardButton(
                     "📝 Complete Registration (DM Bot)",
-                    url=f"https://t.me/{context.bot.username}?start=register_{group_id}"
+                    url=registration_link
                 )
             ],
             [
@@ -108,25 +129,25 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👋 Welcome @{username} to the group!\n\n"
             "⚠️ *REGISTRATION REQUIRED*\n\n"
             "📝 *Before participating, you must:*\n"
-            "1. Read and accept group declaration\n"
-            "2. Complete registration via DM with bot\n"
-            "3. You'll be unmuted automatically\n\n"
+            "1. Click the button below to open DM with bot\n"
+            "2. Read and accept the group declaration\n"
+            "3. You'll be automatically unmuted\n\n"
             "⏰ *Time Limit:* 24 hours\n"
-            "🔐 *Click the button below to start*\n\n"
-            "❓ *Why registration?*\n"
-            "To ensure all members agree to group rules and maintain quality discussions."
+            "🔐 *Click the button below to start registration*"
         )
         
         # Send welcome message
         try:
-            await update.message.reply_text(
+            sent_message = await update.message.reply_text(
                 welcome_message,
                 parse_mode="Markdown",
                 reply_markup=reply_markup
             )
+            print(f"✅ Sent welcome message to {username}")
             
         except Exception as e:
             print(f"❌ Error sending welcome message: {e}")
+
 
 async def view_rules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Callback for viewing rules in group"""
@@ -135,12 +156,14 @@ async def view_rules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     await query.edit_message_text(
         DECLARATION_TEXT + "\n\n" +
-        "📌 *To register:*\n"
-        "1. Click the 'Complete Registration' button\n"
-        "2. Read declaration in DM\n"
-        "3. Accept with inline button",
+        "📌 *To complete registration:*\n"
+        "1. Click 'Complete Registration' button\n"
+        "2. You'll be redirected to bot DM\n"
+        "3. Accept declaration with inline button\n"
+        "4. You'll be automatically unmuted",
         parse_mode="Markdown"
     )
+
 
 async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command in private chat for registration"""
@@ -150,6 +173,8 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.message.from_user.id
     username = update.message.from_user.username or update.message.from_user.first_name
     
+    print(f"🔑 Private /start from {username} (ID: {user_id})")
+    
     # Check if start command has registration parameters
     if context.args and len(context.args) > 0:
         arg = context.args[0]
@@ -158,6 +183,7 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
         if arg.startswith("register_"):
             try:
                 group_id = int(arg.split("_")[1])
+                print(f"📝 Registration attempt for group {group_id} by {username}")
                 
                 # Check if user is in this group
                 try:
@@ -168,7 +194,8 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                             "Please join the group first and try again."
                         )
                         return
-                except:
+                except Exception as e:
+                    print(f"❌ User not in group: {e}")
                     await update.message.reply_text(
                         "❌ You must be a member of the group to register.\n"
                         "Please join the group first and try again."
@@ -198,7 +225,9 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                     'username': username
                 }
                 
-                # Send declaration with inline button
+                print(f"📋 Showing declaration to {username} for group {group_id}")
+                
+                # Send declaration with inline buttons
                 keyboard = [
                     [
                         InlineKeyboardButton(
@@ -225,9 +254,13 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                 return
                 
             except (ValueError, IndexError) as e:
-                print(f"Error parsing registration link: {e}")
+                print(f"❌ Error parsing registration link: {e}")
+                await update.message.reply_text(
+                    "❌ Invalid registration link. Please use the registration button in the group."
+                )
+                return
     
-    # Normal start in private
+    # Normal start in private (not a registration link)
     await update.message.reply_text(
         "👋 Hello! I'm the Target Tracker Bot.\n\n"
         "📝 *Registration Instructions:*\n"
@@ -240,6 +273,7 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
         "Track progress with /mytarget and /today\n\n"
         "Need help? Contact group admin."
     )
+
 
 async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle declaration acceptance via inline button"""
@@ -254,6 +288,8 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
         user_id = query.from_user.id
         username = query.from_user.username or query.from_user.first_name
         
+        print(f"✅ User {username} accepting declaration for group {group_id}")
+        
         # Check if registration exists
         registration = db.get_registration(user_id, group_id)
         if not registration:
@@ -265,6 +301,14 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
         
         # Verify registration
         db.verify_registration(user_id, group_id)
+        print(f"✅ Verified registration for {username}")
+        
+        # Try to get group info
+        try:
+            group_info = await context.bot.get_chat(group_id)
+            group_name = group_info.title if hasattr(group_info, 'title') else f"Group {group_id}"
+        except:
+            group_name = f"Group {group_id}"
         
         # Unmute user in group
         try:
@@ -282,10 +326,7 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
                     'can_pin_messages': False
                 }
             )
-            
-            # Get group info
-            group_info = await context.bot.get_chat(group_id)
-            group_name = group_info.title if hasattr(group_info, 'title') else f"Group {group_id}"
+            print(f"✅ Unmuted user {username} in group {group_id}")
             
             # Update message in DM
             await query.edit_message_text(
@@ -317,10 +358,11 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
                          f"*Reminder:* Don't forget to set your daily target with `/addtarget` !",
                     parse_mode="Markdown"
                 )
+                print(f"✅ Sent welcome announcement for {username} in group")
             except Exception as e:
-                print(f"Could not send welcome message in group: {e}")
+                print(f"⚠️ Could not send welcome message in group: {e}")
             
-            # Clear registration data
+            # Clear registration data from user_data
             if 'registration' in context.user_data:
                 del context.user_data['registration']
                 
@@ -328,13 +370,14 @@ async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAUL
             print(f"❌ Error unmuting user: {e}")
             await query.edit_message_text(
                 "✅ Declaration accepted!\n"
-                "But I couldn't unmute you automatically.\n"
+                "But I couldn't unmute you automatically (bot might not be admin).\n"
                 "Please ask an admin to unmute you in the group."
             )
     
     except (ValueError, IndexError) as e:
-        print(f"Error processing acceptance: {e}")
+        print(f"❌ Error processing acceptance: {e}")
         await query.answer("❌ Error processing your acceptance", show_alert=True)
+
 
 async def handle_decline_declaration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle declaration decline via inline button"""
@@ -352,6 +395,8 @@ async def handle_decline_declaration(update: Update, context: ContextTypes.DEFAU
         "Thank you for your time!",
         parse_mode="Markdown"
     )
+    print(f"❌ User declined declaration")
+
 
 async def handle_member_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle member leaving"""
@@ -375,6 +420,9 @@ async def handle_member_left(update: Update, context: ContextTypes.DEFAULT_TYPE)
             {"user_id": left_member.id, "group_id": group_id},
             {"$set": {"status": "left_group", "left_at": datetime.now()}}
         )
+    
+    print(f"👋 User {left_member.username or left_member.first_name} left group {group_id}")
+
 
 async def check_muted_users(context: ContextTypes.DEFAULT_TYPE):
     """Check and notify muted users (scheduled job)"""
@@ -397,43 +445,39 @@ async def check_muted_users(context: ContextTypes.DEFAULT_TYPE):
                 minutes = int((remaining.total_seconds() % 3600) // 60)
                 
                 # Send reminder at 12 hours, 6 hours, 3 hours, 1 hour, and 30 minutes
-                reminder_hours = [12, 6, 3, 1]
-                reminder_minutes = [30]
+                if hours == 12 or hours == 6 or hours == 3 or hours == 1:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"⏰ *REGISTRATION REMINDER*\n\n"
+                                f"Your registration expires in {hours} hours!\n\n"
+                                f"*To complete registration:*\n"
+                                f"1. Click the registration button in the group\n"
+                                f"2. Read and accept the declaration in DM\n\n"
+                                f"*Note:* If you don't register in time, you'll be removed from the group."
+                            ),
+                            parse_mode="Markdown"
+                        )
+                    except:
+                        pass  # User might have blocked bot
                 
-                for h in reminder_hours:
-                    if hours == h:
-                        try:
-                            await context.bot.send_message(
-                                chat_id=user_id,
-                                text=(
-                                    f"⏰ *REGISTRATION REMINDER*\n\n"
-                                    f"Your registration expires in {hours} hours!\n\n"
-                                    f"*To complete registration:*\n"
-                                    f"1. Click the registration button in the group\n"
-                                    f"2. Read and accept the declaration in DM\n\n"
-                                    f"*Note:* If you don't register in time, you'll be removed from the group."
-                                ),
-                                parse_mode="Markdown"
-                            )
-                        except:
-                            pass
-                
-                for m in reminder_minutes:
-                    if hours == 0 and minutes == m:
-                        try:
-                            await context.bot.send_message(
-                                chat_id=user_id,
-                                text=(
-                                    f"⚠️ *FINAL REGISTRATION REMINDER*\n\n"
-                                    f"Your registration expires in {minutes} minutes!\n\n"
-                                    f"*Hurry!* Click the registration button in the group now!"
-                                ),
-                                parse_mode="Markdown"
-                            )
-                        except:
-                            pass
+                if hours == 0 and minutes == 30:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"⚠️ *FINAL REGISTRATION REMINDER*\n\n"
+                                f"Your registration expires in {minutes} minutes!\n\n"
+                                f"*Hurry!* Click the registration button in the group now!"
+                            ),
+                            parse_mode="Markdown"
+                        )
+                    except:
+                        pass
     except Exception as e:
         print(f"Error in check_muted_users: {e}")
+
 
 def setup_registration_handlers(application):
     """Setup all registration handlers"""
@@ -473,3 +517,5 @@ def setup_registration_handlers(application):
         handle_decline_declaration,
         pattern="^decline_declaration$"
     ))
+    
+    print("✅ Registration handlers setup complete")
