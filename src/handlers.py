@@ -11,20 +11,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
     
-    group_id = update.message.chat.id
+    chat_id = update.message.chat.id
     chat_type = update.message.chat.type
     
-    if chat_type != "group" and chat_type != "supergroup":
+    # Check if it's a group or supergroup
+    if chat_type not in ["group", "supergroup"]:
         await update.message.reply_text("⚠️ This bot only works in groups!")
         return
     
     # Check if group is allowed
-    if not db.is_group_allowed(group_id):
-        await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
-        return
-    
-    group_name = update.message.chat.title or "Unknown Group"
-    db.set_allowed_group(group_id, group_name)
+    if not db.is_group_allowed(chat_id):
+        # Set this group as allowed (first group that uses /start)
+        group_name = update.message.chat.title or f"Group_{chat_id}"
+        db.set_allowed_group(chat_id, group_name)
+        await update.message.reply_text(
+            f"✅ *Group Authorized!*\n\n"
+            f"This group ({group_name}) has been registered as the authorized group.\n"
+            f"Bot is now active here!",
+            parse_mode="Markdown"
+        )
     
     welcome_message = (
         "🎯 *Target Tracker Bot*\n\n"
@@ -54,7 +59,7 @@ async def add_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.from_user.username or update.message.from_user.first_name
     
     # Check if group is allowed
-    if not db.is_allowed_group(group_id):
+    if not db.is_group_allowed(group_id):
         await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
         return
     
@@ -75,7 +80,11 @@ async def add_target_for_user(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     group_id = update.message.chat.id
-    admin_id = update.message.from_user.id
+    
+    # Check if group is allowed
+    if not db.is_group_allowed(group_id):
+        await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
+        return
     
     # Check if user is admin
     if not await is_admin(update, context):
@@ -111,7 +120,7 @@ async def my_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     
     # Check if group is allowed
-    if not db.is_allowed_group(group_id):
+    if not db.is_group_allowed(group_id):
         await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
         return
     
@@ -141,7 +150,7 @@ async def today_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     group_id = update.message.chat.id
     
     # Check if group is allowed
-    if not db.is_allowed_group(group_id):
+    if not db.is_group_allowed(group_id):
         await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
         return
     
@@ -163,7 +172,7 @@ async def my_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     
     # Check if group is allowed
-    if not db.is_allowed_group(group_id):
+    if not db.is_group_allowed(group_id):
         await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
         return
     
@@ -193,7 +202,7 @@ async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.from_user.username or update.message.from_user.first_name
     
     # Check if group is allowed
-    if not db.is_allowed_group(group_id):
+    if not db.is_group_allowed(group_id):
         await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
         return
     
@@ -215,6 +224,13 @@ async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reset all bot data (admin only)."""
     if not update.message:
+        return
+    
+    group_id = update.message.chat.id
+    
+    # Check if group is allowed
+    if not db.is_group_allowed(group_id):
+        await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
         return
     
     # Check if user is admin
@@ -257,12 +273,18 @@ async def bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
     
+    group_id = update.message.chat.id
+    
+    # Check if group is allowed
+    if not db.is_group_allowed(group_id):
+        await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
+        return
+    
     # Check if user is admin
     if not await is_admin(update, context):
         await update.message.reply_text("🚫 This command is for admins only!")
         return
     
-    group_id = update.message.chat.id
     allowed_group = db.get_allowed_group()
     
     if allowed_group:
@@ -281,14 +303,25 @@ async def bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"   • Total Targets: {len(today_targets)}\n"
         f"   • Completed: {completed}\n"
         f"   • Pending: {len(today_targets) - completed}\n\n"
-        f"💾 *Database:* Connected\n"
-        f"⚙️ *Bot Mode:* Testing"
+        f"💾 *Database:* {'Connected ✓' if db.client else 'Not Connected ✗'}\n"
+        f"⚙️ *Bot Mode:* Testing\n"
+        f"🔄 *Reset Available:* Yes (/reset)"
     )
     
     await update.message.reply_text(status_message, parse_mode="Markdown")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a help message."""
+    if not update.message:
+        return
+    
+    group_id = update.message.chat.id
+    
+    # Check if group is allowed
+    if not db.is_group_allowed(group_id):
+        await update.message.reply_text("🚫 This bot is not authorized to work in this group!")
+        return
+    
     help_text = (
         "🎯 *Target Tracker Bot Help*\n\n"
         "*User Commands:*\n"
@@ -317,7 +350,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         group_id = update.message.chat.id
         
         # Check if group is allowed
-        if not db.is_allowed_group(group_id):
+        if not db.is_group_allowed(group_id):
             # Silently ignore messages from unauthorized groups
             return
         
