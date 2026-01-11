@@ -1,5 +1,5 @@
 """
-Registration module for new members with declaration acceptance
+Registration module for new members with inline button declaration acceptance
 """
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, CommandHandler
@@ -9,25 +9,21 @@ import json
 
 from src.database import db
 
-# Conversation states for declaration flow
-DECLARATION, ACCEPT_DECLARATION = range(2)
-
 # Declaration text that users must accept
 DECLARATION_TEXT = """📋 *GROUP DECLARATION & RULES*
 
 By joining this group, you agree to:
 
-1. ✅ Respect all members
-2. ✅ No spam or self-promotion
-3. ✅ Stay on topic
-4. ✅ Use appropriate language
-5. ✅ Follow admin instructions
-6. ✅ Set daily targets and track progress
-7. ✅ Participate actively in group activities
+1. ✅ *Respect All Members* - Be kind and respectful to everyone
+2. ✅ *No Spam or Self-Promotion* - Keep content relevant and valuable
+3. ✅ *Stay On Topic* - Focus on group goals and discussions
+4. ✅ *Use Appropriate Language* - Maintain professional communication
+5. ✅ *Follow Admin Instructions* - Cooperate with group moderators
+6. ✅ *Set Daily Targets* - Actively participate in goal tracking
+7. ✅ *Participate Actively* - Engage in group activities and discussions
+8. ✅ *Confidentiality* - Keep group discussions within the group
 
-*Do you accept these rules and declare to follow them?*
-
-Type "YES, I ACCEPT" to continue.
+*Violation of these rules may result in removal from the group.*
 """
 
 async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,25 +129,23 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"❌ Error sending welcome message: {e}")
 
 async def view_rules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback for viewing rules"""
+    """Callback for viewing rules in group"""
     query = update.callback_query
     await query.answer()
     
-    # Extract user_id from callback data
-    try:
-        user_id = int(query.data.split('_')[-1])
-    except:
-        user_id = query.from_user.id
-    
     await query.edit_message_text(
-        DECLARATION_TEXT,
+        DECLARATION_TEXT + "\n\n" +
+        "📌 *To register:*\n"
+        "1. Click the 'Complete Registration' button\n"
+        "2. Read declaration in DM\n"
+        "3. Accept with inline button",
         parse_mode="Markdown"
     )
 
 async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command in private chat for registration"""
     if not update.message or update.message.chat.type != "private":
-        return ConversationHandler.END
+        return
     
     user_id = update.message.from_user.id
     username = update.message.from_user.username or update.message.from_user.first_name
@@ -173,13 +167,13 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                             "❌ You must be a member of the group to register.\n"
                             "Please join the group first and try again."
                         )
-                        return ConversationHandler.END
+                        return
                 except:
                     await update.message.reply_text(
                         "❌ You must be a member of the group to register.\n"
                         "Please join the group first and try again."
                     )
-                    return ConversationHandler.END
+                    return
                 
                 # Check if user is already verified
                 if db.is_user_verified(user_id, group_id):
@@ -187,7 +181,7 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                         "✅ You are already verified in this group!\n"
                         "You can now participate in discussions."
                     )
-                    return ConversationHandler.END
+                    return
                 
                 # Check if user has pending registration
                 registration = db.get_registration(user_id, group_id)
@@ -195,7 +189,7 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                     await update.message.reply_text(
                         "❌ No registration found. Please use the registration button in the group."
                     )
-                    return ConversationHandler.END
+                    return
                 
                 # Store registration info in context
                 context.user_data['registration'] = {
@@ -204,14 +198,31 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
                     'username': username
                 }
                 
-                # Send declaration
+                # Send declaration with inline button
+                keyboard = [
+                    [
+                        InlineKeyboardButton(
+                            "✅ I ACCEPT THE DECLARATION",
+                            callback_data=f"accept_declaration_{group_id}"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "❌ I DECLINE",
+                            callback_data="decline_declaration"
+                        )
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
                 await update.message.reply_text(
-                    DECLARATION_TEXT + "\n\n"
-                    "*Please type exactly:* `YES, I ACCEPT`",
-                    parse_mode="Markdown"
+                    DECLARATION_TEXT + "\n\n" +
+                    "*Please read the declaration carefully and click one of the buttons below:*",
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup
                 )
                 
-                return DECLARATION
+                return
                 
             except (ValueError, IndexError) as e:
                 print(f"Error parsing registration link: {e}")
@@ -229,37 +240,30 @@ async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYP
         "Track progress with /mytarget and /today\n\n"
         "Need help? Contact group admin."
     )
-    return ConversationHandler.END
 
-async def handle_declaration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle declaration acceptance"""
-    if not update.message or update.message.chat.type != "private":
-        return DECLARATION
+async def handle_accept_declaration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle declaration acceptance via inline button"""
+    query = update.callback_query
+    await query.answer()
     
-    text = update.message.text.strip().upper()
+    if not query.data.startswith("accept_declaration_"):
+        return
     
-    if text == "YES, I ACCEPT":
-        # Get registration info
-        registration_info = context.user_data.get('registration')
-        if not registration_info:
-            await update.message.reply_text(
-                "❌ Registration session expired. Please start again from the group."
-            )
-            return ConversationHandler.END
+    try:
+        group_id = int(query.data.split("_")[-1])
+        user_id = query.from_user.id
+        username = query.from_user.username or query.from_user.first_name
         
-        user_id = registration_info['user_id']
-        group_id = registration_info['group_id']
-        username = registration_info['username']
-        
-        # Verify registration
+        # Check if registration exists
         registration = db.get_registration(user_id, group_id)
         if not registration:
-            await update.message.reply_text(
-                "❌ Registration not found. Please use the registration button in the group."
+            await query.edit_message_text(
+                "❌ Registration not found or expired.\n"
+                "Please use the registration button in the group again."
             )
-            return ConversationHandler.END
+            return
         
-        # Update registration status
+        # Verify registration
         db.verify_registration(user_id, group_id)
         
         # Unmute user in group
@@ -283,70 +287,71 @@ async def handle_declaration(update: Update, context: ContextTypes.DEFAULT_TYPE)
             group_info = await context.bot.get_chat(group_id)
             group_name = group_info.title if hasattr(group_info, 'title') else f"Group {group_id}"
             
-            # Notify in group
-            await context.bot.send_message(
-                chat_id=group_id,
-                text=f"🎉 *WELCOME @{username}!*\n\n"
-                     f"✅ Has accepted the group declaration\n"
-                     f"✅ Is now a verified member\n"
-                     f"✅ Can participate in discussions\n\n"
-                     f"*Reminder:* Don't forget to set your daily target with /addtarget !",
-                parse_mode="Markdown"
-            )
-            
-            # Notify user
-            await update.message.reply_text(
+            # Update message in DM
+            await query.edit_message_text(
                 f"🎉 *REGISTRATION SUCCESSFUL!*\n\n"
                 f"✅ Declaration accepted\n"
                 f"✅ You are now verified in *{group_name}*\n"
                 f"✅ You have been unmuted in the group\n\n"
                 f"*Next Steps:*\n"
                 f"1. Return to the group\n"
-                f"2. Set your daily target: /addtarget\n"
-                f"3. Check others' targets: /today\n"
-                f"4. Mark completed: /done\n\n"
+                f"2. Set your daily target: `/addtarget <your target>`\n"
+                f"3. Check others' targets: `/today`\n"
+                f"4. Mark completed: `/done`\n\n"
                 f"📊 *Track your progress with:*\n"
-                f"• /mytarget - View your target\n"
-                f"• /mytargets - View your history\n"
-                f"• /today - View all targets\n\n"
-                f"Welcome to the community! 🎯",
+                f"• `/mytarget` - View your target\n"
+                f"• `/mytargets` - View your history\n"
+                f"• `/sentences` - View all targets/sentences\n\n"
+                f"*Welcome to the community!* 🎯",
                 parse_mode="Markdown"
             )
             
+            # Notify in group
+            try:
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    text=f"🎉 *WELCOME @{username}!*\n\n"
+                         f"✅ Has accepted the group declaration\n"
+                         f"✅ Is now a verified member\n"
+                         f"✅ Can participate in discussions\n\n"
+                         f"*Reminder:* Don't forget to set your daily target with `/addtarget` !",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"Could not send welcome message in group: {e}")
+            
+            # Clear registration data
+            if 'registration' in context.user_data:
+                del context.user_data['registration']
+                
         except Exception as e:
             print(f"❌ Error unmuting user: {e}")
-            await update.message.reply_text(
+            await query.edit_message_text(
                 "✅ Declaration accepted!\n"
                 "But I couldn't unmute you automatically.\n"
                 "Please ask an admin to unmute you in the group."
             )
-        
-        # Clear registration data
-        if 'registration' in context.user_data:
-            del context.user_data['registration']
-        
-        return ConversationHandler.END
-    else:
-        await update.message.reply_text(
-            "❌ *Incorrect response.*\n\n"
-            "Please type exactly: `YES, I ACCEPT`\n\n"
-            "If you don't agree with the declaration, you cannot participate in the group.",
-            parse_mode="Markdown"
-        )
-        return DECLARATION
+    
+    except (ValueError, IndexError) as e:
+        print(f"Error processing acceptance: {e}")
+        await query.answer("❌ Error processing your acceptance", show_alert=True)
 
-async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel the registration process"""
-    await update.message.reply_text(
-        "❌ Registration cancelled.\n"
-        "You can start again by clicking the registration button in the group."
+async def handle_decline_declaration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle declaration decline via inline button"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "❌ *Registration Declined*\n\n"
+        "You have chosen not to accept the group declaration.\n"
+        "As a result, you will remain muted in the group.\n\n"
+        "If you change your mind, you can:\n"
+        "1. Click the registration button in the group again\n"
+        "2. Re-read the declaration\n"
+        "3. Accept to join the community\n\n"
+        "Thank you for your time!",
+        parse_mode="Markdown"
     )
-    
-    # Clear registration data
-    if 'registration' in context.user_data:
-        del context.user_data['registration']
-    
-    return ConversationHandler.END
 
 async def handle_member_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle member leaving"""
@@ -391,52 +396,53 @@ async def check_muted_users(context: ContextTypes.DEFAULT_TYPE):
                 hours = int(remaining.total_seconds() // 3600)
                 minutes = int((remaining.total_seconds() % 3600) // 60)
                 
-                if hours < 1:  # Less than 1 hour remaining
-                    try:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"⚠️ *REGISTRATION REMINDER*\n\n"
-                                f"Your registration expires in {minutes} minutes!\n\n"
-                                f"To complete registration:\n"
-                                f"1. Click the registration button in the group\n"
-                                f"2. Read and accept the declaration in DM\n\n"
-                                f"*Note:* If you don't register in time, you'll be removed from the group."
-                            ),
-                            parse_mode="Markdown"
-                        )
-                    except:
-                        pass  # User might have blocked bot
+                # Send reminder at 12 hours, 6 hours, 3 hours, 1 hour, and 30 minutes
+                reminder_hours = [12, 6, 3, 1]
+                reminder_minutes = [30]
+                
+                for h in reminder_hours:
+                    if hours == h:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=user_id,
+                                text=(
+                                    f"⏰ *REGISTRATION REMINDER*\n\n"
+                                    f"Your registration expires in {hours} hours!\n\n"
+                                    f"*To complete registration:*\n"
+                                    f"1. Click the registration button in the group\n"
+                                    f"2. Read and accept the declaration in DM\n\n"
+                                    f"*Note:* If you don't register in time, you'll be removed from the group."
+                                ),
+                                parse_mode="Markdown"
+                            )
+                        except:
+                            pass
+                
+                for m in reminder_minutes:
+                    if hours == 0 and minutes == m:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=user_id,
+                                text=(
+                                    f"⚠️ *FINAL REGISTRATION REMINDER*\n\n"
+                                    f"Your registration expires in {minutes} minutes!\n\n"
+                                    f"*Hurry!* Click the registration button in the group now!"
+                                ),
+                                parse_mode="Markdown"
+                            )
+                        except:
+                            pass
     except Exception as e:
         print(f"Error in check_muted_users: {e}")
 
 def setup_registration_handlers(application):
     """Setup all registration handlers"""
     
-    # Conversation handler for registration
-    conv_handler = ConversationHandler(
-        entry_points=[
-            MessageHandler(
-                filters.ChatType.PRIVATE & filters.Regex(r'^/start'),
-                handle_private_start
-            )
-        ],
-        states={
-            DECLARATION: [
-                MessageHandler(
-                    filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
-                    handle_declaration
-                )
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel_registration),
-            MessageHandler(filters.COMMAND, cancel_registration)
-        ],
-        allow_reentry=True
-    )
-    
-    application.add_handler(conv_handler)
+    # Handle private start command for registration
+    application.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.Regex(r'^/start'),
+        handle_private_start
+    ))
     
     # Handle new members joining
     application.add_handler(MessageHandler(
@@ -450,8 +456,20 @@ def setup_registration_handlers(application):
         handle_member_left
     ))
     
-    # Callback for viewing rules
+    # Callback for viewing rules in group
     application.add_handler(CallbackQueryHandler(
         view_rules_callback,
         pattern="^view_rules_"
+    ))
+    
+    # Callback for accepting declaration in DM
+    application.add_handler(CallbackQueryHandler(
+        handle_accept_declaration,
+        pattern="^accept_declaration_"
+    ))
+    
+    # Callback for declining declaration in DM
+    application.add_handler(CallbackQueryHandler(
+        handle_decline_declaration,
+        pattern="^decline_declaration$"
     ))
