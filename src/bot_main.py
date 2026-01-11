@@ -1,4 +1,4 @@
-"""
+    """
 Main bot file - Entry point for the bot
 """
 import os
@@ -16,6 +16,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def main():
     """Start the bot."""
     # Get bot token from environment
@@ -23,8 +24,15 @@ def main():
     if not BOT_TOKEN:
         raise ValueError("❌ BOT_TOKEN environment variable is required!")
     
+    print("=" * 60)
+    print("🤖 Starting Target Tracker Bot")
+    print("=" * 60)
+    print(f"✅ Bot Token: {'✓ Set' if BOT_TOKEN else '✗ Missing'}")
+    
     # Import after environment is loaded
     from src.database import db
+    print(f"✅ MongoDB: {'Connected ✓' if db.client else 'Not Connected ✗'}")
+    
     from src.handlers import (
         start, add_target, add_target_for_user, my_target,
         today_targets, my_targets, mark_done, reset_data,
@@ -36,6 +44,7 @@ def main():
     
     # Create Application
     application = Application.builder().token(BOT_TOKEN).build()
+    print("✅ Application created")
     
     # Register command handlers for groups
     application.add_handler(CommandHandler("start", start, filters=filters.ChatType.GROUP | filters.ChatType.SUPERGROUP))
@@ -56,9 +65,11 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.GROUP & filters.TEXT & ~filters.COMMAND, handle_group_message))
     
     # Setup registration handlers
+    print("🔄 Setting up registration handlers...")
     setup_registration_handlers(application)
     
     # Setup sentence handlers
+    print("🔄 Setting up sentence handlers...")
     setup_sentence_handlers(application)
     
     # Register error handler
@@ -68,13 +79,7 @@ def main():
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(check_muted_users, interval=1800, first=10)  # Every 30 minutes
-    
-    # Start the Bot
-    print("=" * 60)
-    print("🤖 Starting Target Tracker Bot with Enhanced Features")
-    print("=" * 60)
-    print(f"✅ Bot Token: {'✓ Set' if BOT_TOKEN else '✗ Missing'}")
-    print(f"✅ MongoDB: {'Connected ✓' if db.client else 'Not Connected ✗'}")
+        print("✅ Scheduled job for muted users check")
     
     # Get allowed group info
     allowed_group = db.get_allowed_group()
@@ -84,30 +89,26 @@ def main():
         print("⚠️ No group authorized yet. Bot will work in the first group it's added to.")
     
     print("=" * 60)
-    print("📋 Available Features:")
-    print("  ✅ Inline Button Declaration Registration")
-    print("  ✅ Automatic Mute/Unmute System")
-    print("  ✅ Sentence/Target System with Categories")
-    print("  ✅ Like System for Engagement")
-    print("  ✅ Group Rules Acceptance")
+    print("📋 Bot Features:")
+    print("  ✅ New member auto-mute")
+    print("  ✅ Registration via DM with inline buttons")
+    print("  ✅ Declaration acceptance system")
+    print("  ✅ Auto-unmute after registration")
+    print("  ✅ Target tracking system")
+    print("  ✅ Sentence sharing with categories")
     print("=" * 60)
-    print("📋 Group Commands:")
-    print("  /start - Initialize bot in group")
-    print("  /addtarget <target> - Add daily target")
-    print("  /addsentence <sentence> - Add sentence with category")
-    print("  /sentences - View all sentences")
-    print("  /mysentences - View your sentences")
-    print("  /reset - Reset all data (admin)")
+    print("🔧 Important Requirements:")
+    print("  1. Bot MUST be admin in the group")
+    print("  2. Bot needs these admin permissions:")
+    print("     • Delete messages")
+    print("     • Restrict members")
+    print("     • Ban members")
     print("=" * 60)
-    print("🔐 Registration Flow:")
-    print("  1. New member joins → Gets muted")
-    print("  2. Clicks registration button → Opens DM")
-    print("  3. Reads declaration → Clicks 'I ACCEPT'")
-    print("  4. Auto-unmuted in group → Can participate")
-    print("=" * 60)
+    print("🚀 Bot is starting...")
     
     # Run the bot
     application.run_polling(allowed_updates=None, drop_pending_updates=True)
+
 
 if __name__ == '__main__':
     main()
