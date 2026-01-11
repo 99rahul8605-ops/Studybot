@@ -1,15 +1,37 @@
 """
-Registration module for new members
+Registration module for new members with declaration acceptance
 """
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 from datetime import datetime
 import re
+import json
 
 from src.database import db
 
+# Conversation states for declaration flow
+DECLARATION, ACCEPT_DECLARATION = range(2)
+
+# Declaration text that users must accept
+DECLARATION_TEXT = """📋 *GROUP DECLARATION & RULES*
+
+By joining this group, you agree to:
+
+1. ✅ Respect all members
+2. ✅ No spam or self-promotion
+3. ✅ Stay on topic
+4. ✅ Use appropriate language
+5. ✅ Follow admin instructions
+6. ✅ Set daily targets and track progress
+7. ✅ Participate actively in group activities
+
+*Do you accept these rules and declare to follow them?*
+
+Type "YES, I ACCEPT" to continue.
+"""
+
 async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle new member joining"""
+    """Handle new member joining with declaration system"""
     if not update.message or not update.message.new_chat_members:
         return
     
@@ -35,16 +57,16 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"👋 Welcome back @{username}! You're already verified."
             )
-            return
+            continue
         
         # Create registration record
-        verification_code = db.create_registration(user_id, group_id, username)
+        registration_id = db.create_registration(user_id, group_id, username)
         
-        if not verification_code:
+        if not registration_id:
             await update.message.reply_text(
                 f"❌ Failed to create registration for @{username}. Please contact admin."
             )
-            return
+            continue
         
         # Mute the user
         db.mute_user(user_id, group_id, hours=24)
@@ -73,8 +95,14 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "📝 Register Now (DM Bot)",
-                    url=f"https://t.me/{context.bot.username}?start=register_{group_id}_{verification_code}"
+                    "📝 Complete Registration (DM Bot)",
+                    url=f"https://t.me/{context.bot.username}?start=register_{group_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📋 View Group Rules",
+                    callback_data=f"view_rules_{user_id}"
                 )
             ]
         ]
@@ -82,14 +110,16 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         welcome_message = (
             f"👋 Welcome @{username} to the group!\n\n"
-            "⚠️ *You need to register before you can participate.*\n\n"
-            "📝 *Registration Steps:*\n"
-            "1. Click the button below to open DM with bot\n"
-            "2. Send the verification code to bot\n"
+            "⚠️ *REGISTRATION REQUIRED*\n\n"
+            "📝 *Before participating, you must:*\n"
+            "1. Read and accept group declaration\n"
+            "2. Complete registration via DM with bot\n"
             "3. You'll be unmuted automatically\n\n"
             "⏰ *Time Limit:* 24 hours\n"
-            "🔐 *Verification Code:* ||`{code}`||"
-        ).format(code=verification_code)
+            "🔐 *Click the button below to start*\n\n"
+            "❓ *Why registration?*\n"
+            "To ensure all members agree to group rules and maintain quality discussions."
+        )
         
         # Send welcome message
         try:
@@ -99,24 +129,224 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=reply_markup
             )
             
-            # Try to send private message as well
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=(
-                        f"👋 Welcome to {update.message.chat.title}!\n\n"
-                        f"📝 *Registration Required*\n\n"
-                        f"Your verification code: `{verification_code}`\n\n"
-                        f"Send this code to me to complete registration.\n"
-                        f"Or click: /verify_{verification_code}"
-                    ),
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                print(f"⚠️ Could not send DM to user: {e}")
-                
         except Exception as e:
             print(f"❌ Error sending welcome message: {e}")
+
+async def view_rules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback for viewing rules"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract user_id from callback data
+    try:
+        user_id = int(query.data.split('_')[-1])
+    except:
+        user_id = query.from_user.id
+    
+    await query.edit_message_text(
+        DECLARATION_TEXT,
+        parse_mode="Markdown"
+    )
+
+async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command in private chat for registration"""
+    if not update.message or update.message.chat.type != "private":
+        return
+    
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or update.message.from_user.first_name
+    
+    # Check if start command has registration parameters
+    if context.args and len(context.args) > 0:
+        arg = context.args[0]
+        
+        # Check if it's a registration link
+        if arg.startswith("register_"):
+            try:
+                group_id = int(arg.split("_")[1])
+                
+                # Check if user is in this group
+                try:
+                    chat_member = await context.bot.get_chat_member(group_id, user_id)
+                    if chat_member.status not in ['member', 'administrator', 'creator']:
+                        await update.message.reply_text(
+                            "❌ You must be a member of the group to register.\n"
+                            "Please join the group first and try again."
+                        )
+                        return
+                except:
+                    await update.message.reply_text(
+                        "❌ You must be a member of the group to register.\n"
+                        "Please join the group first and try again."
+                    )
+                    return
+                
+                # Check if user is already verified
+                if db.is_user_verified(user_id, group_id):
+                    await update.message.reply_text(
+                        "✅ You are already verified in this group!\n"
+                        "You can now participate in discussions."
+                    )
+                    return
+                
+                # Check if user has pending registration
+                registration = db.get_registration(user_id, group_id)
+                if not registration:
+                    await update.message.reply_text(
+                        "❌ No registration found. Please use the registration button in the group."
+                    )
+                    return
+                
+                # Store registration info in context
+                context.user_data['registration'] = {
+                    'group_id': group_id,
+                    'user_id': user_id,
+                    'username': username
+                }
+                
+                # Send declaration
+                await update.message.reply_text(
+                    DECLARATION_TEXT + "\n\n"
+                    "*Please type exactly:* `YES, I ACCEPT`",
+                    parse_mode="Markdown"
+                )
+                
+                return DECLARATION
+                
+            except (ValueError, IndexError) as e:
+                print(f"Error parsing registration link: {e}")
+    
+    # Normal start in private
+    await update.message.reply_text(
+        "👋 Hello! I'm the Target Tracker Bot.\n\n"
+        "📝 *Registration Instructions:*\n"
+        "1. Join the group where I'm added\n"
+        "2. Click the registration button in the group\n"
+        "3. Read and accept the declaration in DM\n"
+        "4. You'll be automatically unmuted\n\n"
+        "🎯 *After Registration:*\n"
+        "You can set daily targets with /addtarget\n"
+        "Track progress with /mytarget and /today\n\n"
+        "Need help? Contact group admin."
+    )
+    return ConversationHandler.END
+
+async def handle_declaration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle declaration acceptance"""
+    if not update.message or update.message.chat.type != "private":
+        return DECLARATION
+    
+    text = update.message.text.strip().upper()
+    
+    if text == "YES, I ACCEPT":
+        # Get registration info
+        registration_info = context.user_data.get('registration')
+        if not registration_info:
+            await update.message.reply_text(
+                "❌ Registration session expired. Please start again from the group."
+            )
+            return ConversationHandler.END
+        
+        user_id = registration_info['user_id']
+        group_id = registration_info['group_id']
+        username = registration_info['username']
+        
+        # Verify registration
+        registration = db.get_registration(user_id, group_id)
+        if not registration:
+            await update.message.reply_text(
+                "❌ Registration not found. Please use the registration button in the group."
+            )
+            return ConversationHandler.END
+        
+        # Update registration status
+        db.verify_registration(user_id, group_id)
+        
+        # Unmute user in group
+        try:
+            await context.bot.restrict_chat_member(
+                chat_id=group_id,
+                user_id=user_id,
+                permissions={
+                    'can_send_messages': True,
+                    'can_send_media_messages': True,
+                    'can_send_polls': True,
+                    'can_send_other_messages': True,
+                    'can_add_web_page_previews': True,
+                    'can_change_info': False,
+                    'can_invite_users': False,
+                    'can_pin_messages': False
+                }
+            )
+            
+            # Get group info
+            group_info = await context.bot.get_chat(group_id)
+            group_name = group_info.title if hasattr(group_info, 'title') else f"Group {group_id}"
+            
+            # Notify in group
+            await context.bot.send_message(
+                chat_id=group_id,
+                text=f"🎉 *WELCOME @{username}!*\n\n"
+                     f"✅ Has accepted the group declaration\n"
+                     f"✅ Is now a verified member\n"
+                     f"✅ Can participate in discussions\n\n"
+                     f"*Reminder:* Don't forget to set your daily target with /addtarget !",
+                parse_mode="Markdown"
+            )
+            
+            # Notify user
+            await update.message.reply_text(
+                f"🎉 *REGISTRATION SUCCESSFUL!*\n\n"
+                f"✅ Declaration accepted\n"
+                f"✅ You are now verified in *{group_name}*\n"
+                f"✅ You have been unmuted in the group\n\n"
+                f"*Next Steps:*\n"
+                f"1. Return to the group\n"
+                f"2. Set your daily target: /addtarget\n"
+                f"3. Check others' targets: /today\n"
+                f"4. Mark completed: /done\n\n"
+                f"📊 *Track your progress with:*\n"
+                f"• /mytarget - View your target\n"
+                f"• /mytargets - View your history\n"
+                f"• /today - View all targets\n\n"
+                f"Welcome to the community! 🎯",
+                parse_mode="Markdown"
+            )
+            
+        except Exception as e:
+            print(f"❌ Error unmuting user: {e}")
+            await update.message.reply_text(
+                "✅ Declaration accepted!\n"
+                "But I couldn't unmute you automatically.\n"
+                "Please ask an admin to unmute you in the group."
+            )
+        
+        # Clear registration data
+        if 'registration' in context.user_data:
+            del context.user_data['registration']
+        
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text(
+            "❌ *Incorrect response.*\n\n"
+            "Please type exactly: `YES, I ACCEPT`\n\n"
+            "If you don't agree with the declaration, you cannot participate in the group.",
+            parse_mode="Markdown"
+        )
+        return DECLARATION
+
+async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel the registration process"""
+    await update.message.reply_text(
+        "❌ Registration cancelled.\n"
+        "You can start again by clicking the registration button in the group."
+    )
+    
+    # Clear registration data
+    if 'registration' in context.user_data:
+        del context.user_data['registration']
+    
+    return ConversationHandler.END
 
 async def handle_member_left(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle member leaving"""
@@ -130,233 +360,16 @@ async def handle_member_left(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if left_member.id == context.bot.id:
         return
     
-    # User left, we can delete their registration so they need to re-register if they rejoin
+    # User left, mark registration as inactive
     db.unmute_user(left_member.id, group_id)
-    # Note: We keep registration record but mark as inactive
+    
+    # Update registration status
     registration = db.get_registration(left_member.id, group_id)
     if registration:
         db.db.registrations.update_one(
             {"user_id": left_member.id, "group_id": group_id},
             {"$set": {"status": "left_group", "left_at": datetime.now()}}
         )
-
-async def handle_private_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command in private chat for registration"""
-    if not update.message or update.message.chat.type != "private":
-        return
-    
-    user_id = update.message.from_user.id
-    
-    # Check if start command has registration parameters
-    if context.args and len(context.args) > 0:
-        arg = context.args[0]
-        
-        # Check if it's a registration link
-        if arg.startswith("register_"):
-            try:
-                parts = arg.split("_")
-                if len(parts) >= 3:
-                    group_id = int(parts[1])
-                    code = parts[2]
-                    
-                    # Store in user data for verification
-                    context.user_data['pending_registration'] = {
-                        'group_id': group_id,
-                        'code': code
-                    }
-                    
-                    # Get group info
-                    group = db.get_allowed_group()
-                    group_name = group['group_name'] if group else f"Group {group_id}"
-                    
-                    await update.message.reply_text(
-                        f"📝 *Registration for {group_name}*\n\n"
-                        f"Your verification code: `{code}`\n\n"
-                        "To complete registration, please:\n"
-                        "1. Send me the code above\n"
-                        "2. Or use command: /verify {code}\n\n"
-                        "Once verified, you'll be unmuted in the group.",
-                        parse_mode="Markdown"
-                    )
-                    return
-            except (ValueError, IndexError):
-                pass
-    
-    # Normal start in private
-    await update.message.reply_text(
-        "👋 Hello! I'm the Target Tracker Bot.\n\n"
-        "📝 *Registration Instructions:*\n"
-        "1. Join the group where I'm added\n"
-        "2. Click the registration button\n"
-        "3. Send me the verification code\n\n"
-        "🎯 *After Registration:*\n"
-        "You can set daily targets with /addtarget\n"
-        "Track progress with /mytarget and /today\n\n"
-        "Need help? Contact group admin."
-    )
-
-async def handle_verification_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle verification command in private chat"""
-    if not update.message or update.message.chat.type != "private":
-        return
-    
-    user_id = update.message.from_user.id
-    
-    if not context.args:
-        await update.message.reply_text(
-            "❌ Please provide verification code.\n"
-            "Usage: /verify CODE\n"
-            "Or simply send me the code."
-        )
-        return
-    
-    code = context.args[0].upper().strip()
-    await verify_code(update, context, code)
-
-async def handle_verification_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle verification via regular message"""
-    if not update.message or update.message.chat.type != "private":
-        return
-    
-    text = update.message.text.strip().upper()
-    
-    # Check if it looks like a verification code (6 chars, alphanumeric)
-    if re.match(r'^[A-Z0-9]{6}$', text):
-        await verify_code(update, context, text)
-
-async def verify_code(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
-    """Verify registration code"""
-    user_id = update.message.from_user.id
-    
-    # Check pending registration from context
-    pending = context.user_data.get('pending_registration')
-    
-    if pending:
-        group_id = pending['group_id']
-        expected_code = pending['code']
-        
-        if code == expected_code:
-            # Verify registration
-            if db.verify_registration(user_id, group_id, code):
-                # Get group info
-                group = db.get_allowed_group()
-                group_name = group['group_name'] if group else f"Group {group_id}"
-                
-                # Unmute user in group
-                try:
-                    await context.bot.restrict_chat_member(
-                        chat_id=group_id,
-                        user_id=user_id,
-                        permissions={
-                            'can_send_messages': True,
-                            'can_send_media_messages': True,
-                            'can_send_polls': True,
-                            'can_send_other_messages': True,
-                            'can_add_web_page_previews': True,
-                            'can_change_info': False,
-                            'can_invite_users': False,
-                            'can_pin_messages': False
-                        }
-                    )
-                    
-                    # Notify in group
-                    username = update.message.from_user.username or update.message.from_user.first_name
-                    await context.bot.send_message(
-                        chat_id=group_id,
-                        text=f"✅ @{username} has completed registration and is now unmuted! Welcome! 🎉"
-                    )
-                    
-                    # Notify user
-                    await update.message.reply_text(
-                        f"🎉 *Registration Successful!*\n\n"
-                        f"You are now verified in {group_name}.\n"
-                        f"You can now participate in the group!\n\n"
-                        f"🎯 *Group Features:*\n"
-                        f"• Set daily targets with /addtarget\n"
-                        f"• Track with /mytarget and /today\n"
-                        f"• Mark completion with /done",
-                        parse_mode="Markdown"
-                    )
-                    
-                    # Clear pending registration
-                    del context.user_data['pending_registration']
-                    
-                except Exception as e:
-                    print(f"❌ Error unmuting user: {e}")
-                    await update.message.reply_text(
-                        "✅ Verified! But couldn't unmute you automatically.\n"
-                        "Please ask admin to unmute you in the group."
-                    )
-            else:
-                await update.message.reply_text(
-                    "❌ Verification failed. Please check the code and try again."
-                )
-        else:
-            await update.message.reply_text(
-                "❌ Code doesn't match. Please use the code from your registration message."
-            )
-    else:
-        # Search for registration with this code
-        registration = db.db.registrations.find_one({
-            "user_id": user_id,
-            "verification_code": code,
-            "status": "pending"
-        })
-        
-        if registration:
-            group_id = registration['group_id']
-            if db.verify_registration(user_id, group_id, code):
-                # Get group info
-                group = db.get_allowed_group()
-                group_name = group['group_name'] if group else f"Group {group_id}"
-                
-                # Unmute user in group
-                try:
-                    await context.bot.restrict_chat_member(
-                        chat_id=group_id,
-                        user_id=user_id,
-                        permissions={
-                            'can_send_messages': True,
-                            'can_send_media_messages': True,
-                            'can_send_polls': True,
-                            'can_send_other_messages': True,
-                            'can_add_web_page_previews': True,
-                            'can_change_info': False,
-                            'can_invite_users': False,
-                            'can_pin_messages': False
-                        }
-                    )
-                    
-                    # Notify in group
-                    username = update.message.from_user.username or update.message.from_user.first_name
-                    await context.bot.send_message(
-                        chat_id=group_id,
-                        text=f"✅ @{username} has completed registration and is now unmuted! Welcome! 🎉"
-                    )
-                    
-                    # Notify user
-                    await update.message.reply_text(
-                        f"🎉 *Registration Successful!*\n\n"
-                        f"You are now verified in {group_name}.\n"
-                        f"You can now participate in the group!",
-                        parse_mode="Markdown"
-                    )
-                    
-                except Exception as e:
-                    print(f"❌ Error unmuting user: {e}")
-                    await update.message.reply_text(
-                        "✅ Verified! But couldn't unmute you automatically.\n"
-                        "Please ask admin to unmute you in the group."
-                    )
-            else:
-                await update.message.reply_text(
-                    "❌ Verification failed. Please try again or contact admin."
-                )
-        else:
-            await update.message.reply_text(
-                "❌ Invalid verification code or code already used.\n"
-                "Please check the code from your registration message."
-            )
 
 async def check_muted_users(context: ContextTypes.DEFAULT_TYPE):
     """Check and notify muted users (scheduled job)"""
@@ -383,10 +396,12 @@ async def check_muted_users(context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(
                             chat_id=user_id,
                             text=(
-                                f"⚠️ *Registration Reminder*\n\n"
-                                f"Your registration expires in {minutes} minutes!\n"
-                                f"Code: `{registration['verification_code']}`\n\n"
-                                f"Send the code to me or use: /verify_{registration['verification_code']}"
+                                f"⚠️ *REGISTRATION REMINDER*\n\n"
+                                f"Your registration expires in {minutes} minutes!\n\n"
+                                f"To complete registration:\n"
+                                f"1. Click the registration button in the group\n"
+                                f"2. Read and accept the declaration in DM\n\n"
+                                f"*Note:* If you don't register in time, you'll be removed from the group."
                             ),
                             parse_mode="Markdown"
                         )
@@ -397,6 +412,32 @@ async def check_muted_users(context: ContextTypes.DEFAULT_TYPE):
 
 def setup_registration_handlers(application):
     """Setup all registration handlers"""
+    
+    # Conversation handler for registration
+    conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(
+                filters.ChatType.PRIVATE & filters.Regex(r'^/start'),
+                handle_private_start
+            )
+        ],
+        states={
+            DECLARATION: [
+                MessageHandler(
+                    filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+                    handle_declaration
+                )
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_registration),
+            MessageHandler(filters.COMMAND, cancel_registration)
+        ],
+        allow_reentry=True
+    )
+    
+    application.add_handler(conv_handler)
+    
     # Handle new members joining
     application.add_handler(MessageHandler(
         filters.StatusUpdate.NEW_CHAT_MEMBERS, 
@@ -409,20 +450,8 @@ def setup_registration_handlers(application):
         handle_member_left
     ))
     
-    # Handle private start command
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.Regex(r'^/start'),
-        handle_private_start
-    ))
-    
-    # Handle verification command
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.Regex(r'^/verify'),
-        handle_verification_command
-    ))
-    
-    # Handle verification via message
-    application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
-        handle_verification_message
+    # Callback for viewing rules
+    application.add_handler(CallbackQueryHandler(
+        view_rules_callback,
+        pattern="^view_rules_"
     ))
