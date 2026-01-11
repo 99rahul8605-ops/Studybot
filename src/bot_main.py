@@ -33,10 +33,6 @@ def main():
     )
     from src.registration import setup_registration_handlers, check_muted_users
     from src.sentences import setup_sentence_handlers
-    from health_check import start_health_server
-    
-    # Start health check server in background
-    health_thread = start_health_server()
     
     # Create Application
     application = Application.builder().token(BOT_TOKEN).build()
@@ -79,7 +75,6 @@ def main():
     print("=" * 60)
     print(f"✅ Bot Token: {'✓ Set' if BOT_TOKEN else '✗ Missing'}")
     print(f"✅ MongoDB: {'Connected ✓' if db.client else 'Not Connected ✗'}")
-    print(f"✅ Health Server: {'Running ✓' if health_thread.is_alive() else 'Not Running ✗'}")
     
     # Get allowed group info
     allowed_group = db.get_allowed_group()
